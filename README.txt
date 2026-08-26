@@ -20,31 +20,31 @@ sudo sh uninstall.sh
 git clone https://github.com/ZeljkoRasovic/rwx.git
 cd rwx
 ::2. Konfigurisanje
-configure.bat
+.\configure.bat
 ::3. Kompajliranje
-compile.bat rwx.c
+.\compile.bat rwx.c
 ::4. Pokretanje
-rwx.exe
+.\rwx.exe
 ::5. Instalacija (traziti admin privilegije za dodavanje u Path)
-install.bat
+.\install.bat
 ::6. Uklanjanje
-uninstall.bat
+.\uninstall.bat
 
 # Modifikovanje
 # Posix (Linux, MacOS, FreeBSD, OpenBSD, NetBSD):
 cp rwx.c rwx_modified.c
 #edituje rwx_modified.c
 #kada sve radi što hoćemo na rwx_modified.c
-#radimo sledeće kako bi napravi i primeni patch
-sh patch.sh gen rwx_modified.c rwx.c moja_zakrpa.diff
-sh patch.sh apply moja_zakrpa.diff rwx.c
+#radimo sledeće kako bi napravi i primeni zakrpu
+sh patch_code.sh gen rwx_modified.c rwx.c moja_zakrpa.diff
+sh patch_code.sh apply moja_zakrpa.diff rwx.c
 sh compile.sh rwx.c
 
 :: Windows:
 cp rwx.c rwx_modified.c
 ::edituje rwx_modified.c
 ::kada sve radi što hoćemo na rwx_modified.c
-::radimo sledeće kako bi napravi i primeni patch
-.\patch.bat gen rwx_modified.c rwx.c moja_zakrpa.diff
-.\patch.bat apply moja_zakrpa.diff rwx.c
+::radimo sledeće kako bi napravi i primeni zakrpu
+.\patch_code.bat gen rwx_modified.c rwx.c moja_zakrpa.diff
+.\patch_code.bat apply moja_zakrpa.diff rwx.c
 .\compile.bat rwx.c

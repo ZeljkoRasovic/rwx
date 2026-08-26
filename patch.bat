@@ -318,7 +318,7 @@ if "%EXIT_CODE%"=="" set "EXIT_CODE=1"
  echo Examples:
  echo  .\%PROG% gen rwx.c rwx_with_cpp.c patch_cpp_support_1_0_0.diff
  echo  .\%PROG% apply patch_cpp_support_1_0_0.diff rwx.c
- -------------------------
+ echo -------------------------
 )
 if %EXIT_CODE% equ 1 (
  call :cleanup

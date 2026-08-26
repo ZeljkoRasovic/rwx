@@ -1,0 +1,1990 @@
+diff --git "C:\\Users\\Admin\\AppData\\Local\\Temp\\orig_git.8936.1" "C:\\Users\\Admin\\AppData\\Local\\Temp\\mod_git.20744.1"
+index d6a00f7..5887b3d 100644
+--- .\rwx.c
++++ .\rwx_vim_mode.c
+@@ -689,6 +689,19 @@ char* prompt(uint8_t color,char* prompt,void (*callback)(char*,uint16_t));
+ void move_cursor(uint16_t key);
+ void mouse_to_cursor(int32_t m_x,int32_t m_y,int32_t* c_x_out,int32_t* c_y_out);
+ void select_word_at(int32_t c_x,int32_t c_y);
++static uint8_t vim_char_class(char ch);
++static void motion_word_forward();
++static void motion_word_backward();
++static void motion_word_end();
++static void insert_plain_char(uint16_t c);
++static void delete_range_with_undo(int32_t x_1,int32_t y_1,int32_t x_2,int32_t y_2);
++static void vim_delete_lines(int32_t count);
++static void vim_change_word(int32_t count,char kind);
++static void vim_replace_char(uint16_t new_c,int32_t count);
++static void vim_substitute_chars(int32_t count);
++static void vim_paste_after();
++static void vim_paste_before();
++static void vim_command_prompt();
+ void process_keypress();
+ 
+ //output
+@@ -6089,576 +6102,1631 @@ void select_word_at(int32_t c_x,int32_t c_y)
+  E.c_y=c_y;
+ }
+ 
+-void process_keypress()
++static uint8_t vim_char_class(char ch)
+ {
+- static int8_t quit_times=QUIT_TIMES;
+- static int8_t open_times=QUIT_TIMES;
+- static int8_t refresh_times=QUIT_TIMES;
+- static char utf8_buf[4];
+- static int utf8_len=0;
+- static int utf8_expected=0;
+- actions action;
+- memset(&action,0,sizeof(action));
+- uint16_t c=read_key();
++ unsigned char u_c=(unsigned char)ch;
+ 
+-  if(c >= 1000 || c < 32 || c == 127)
++ if(isspace(u_c))
++ {
++  return 0;
++ }
++ if(isalnum(u_c) || u_c == '_')
++ {
++  return 1;
++ }
++ return 2;
++}
++
++static void motion_word_forward()
++{
++ if(E.c_y >= E.num_rows)
++ {
++  return;
++ }
++
++ e_row* row=&E.row[E.c_y];
++
++ if(E.c_x < row->size)
++ {
++  uint8_t cls=vim_char_class(row->characters[E.c_x]);
++
++  if(cls != 0)
+   {
+-   utf8_len=0;
+-   utf8_expected=0;
++   while(E.c_x < row->size && vim_char_class(row->characters[E.c_x]) == cls)
++   {
++    ++E.c_x;
++   }
+   }
++ }
+ 
+- switch(c)
++ for(;;)
+  {
+-  case RESIZE_KEY:
++  row=&E.row[E.c_y];
++
++  while(E.c_x < row->size && vim_char_class(row->characters[E.c_x]) == 0)
+   {
+-   window_resized=0;
++   ++E.c_x;
++  }
+ 
+-   if(get_window_size(&E.term_rows,&E.screen_cols) == -1)
++  if(E.c_x < row->size)
++  {
++   return;
++  }
++  if(E.c_y >= E.num_rows-1)
++  {
++   return;
++  }
++
++  ++E.c_y;
++  E.c_x=0;
++  row=&E.row[E.c_y];
++
++  if(row->size == 0)
++  {
++   return;
++  }
++ }
++}
++
++static void motion_word_backward()
++{
++ if(E.c_x == 0)
++ {
++  if(E.c_y == 0)
++  {
++   return;
++  }
++
++  --E.c_y;
++  E.c_x=E.row[E.c_y].size;
++
++  if(E.c_x == 0)
++  {
++   return;
++  }
++ }
++
++ e_row* row=&E.row[E.c_y];
++ --E.c_x;
++
++ while(E.c_x > 0 && vim_char_class(row->characters[E.c_x]) == 0)
++ {
++  --E.c_x;
++ }
++
++ if(vim_char_class(row->characters[E.c_x]) == 0)
++ {
++  return;
++ }
++
++ uint8_t cls=vim_char_class(row->characters[E.c_x]);
++
++ while(E.c_x > 0 && vim_char_class(row->characters[E.c_x-1]) == cls)
++ {
++  --E.c_x;
++ }
++}
++
++static void motion_word_end()
++{
++ if(E.c_y >= E.num_rows)
++ {
++  return;
++ }
++
++ e_row* row=&E.row[E.c_y];
++
++ if(E.c_x < row->size)
++ {
++  ++E.c_x;
++ }
++
++ for(;;)
++ {
++  row=&E.row[E.c_y];
++
++  while(E.c_x < row->size && vim_char_class(row->characters[E.c_x]) == 0)
++  {
++   ++E.c_x;
++  }
++
++  if(E.c_x < row->size)
++  {
++   break;
++  }
++  if(E.c_y >= E.num_rows-1)
++  {
++   if(row->size > 0)
+    {
+-    die("get_window_size [process_keypress]");
++    E.c_x=row->size-1;
+    }
+-   ++E.wrap_generation;
+    return;
+   }
+-  break;
+ 
+-  case '\r':
++  ++E.c_y;
++  E.c_x=0;
++ }
++
++ uint8_t cls=vim_char_class(row->characters[E.c_x]);
++
++ while(E.c_x+1 < row->size && vim_char_class(row->characters[E.c_x+1]) == cls)
++ {
++  ++E.c_x;
++ }
++}
++
++static void insert_plain_char(uint16_t c)
++{
++ if(c != '\t' && (c < 32 || c == 127))
++ {
++  return;
++ }
++
++ actions action;
++ memset(&action,0,sizeof(action));
++
++ E.saved_r_x=-1;
++ action.type=USER_ACTION_INSERT_CHAR;
++ action.c_x=E.c_x;
++ action.c_y=E.c_y;
++ action.c[0]=(char)c;
++ action.c_len=1;
++ action.row_text=NULL;
++ undo_push(&action);
++ insert_char(c);
++}
++
++static void delete_range_with_undo(int32_t x_1,int32_t y_1,int32_t x_2,int32_t y_2)
++{
++ if(y_1 == y_2 && x_1 == x_2)
++ {
++  return;
++ }
++
++ e_row* row=NULL;
++ uint32_t total=0;
++ int32_t start=0;
++ int32_t end=0;
++ uint32_t pos=0;
++ int32_t y=0;
++
++ for(y=y_1;y <= y_2;++y)
++ {
++  row=&E.row[y];
++  start=(y == y_1) ? x_1 : 0;
++  end=(y == y_2) ? x_2 : row->size;
++
++  if(end > start)
+   {
+-   if(E.mode != MODE_INSERT)
++   total+=(end-start);
++  }
++  if(y < y_2)
++  {
++   total+=1;
++  }
++ }
++
++ char* deleted_text=malloc(total > 0 ? total : 1);
++
++ if(deleted_text == NULL)
++ {
++  return;
++ }
++
++ for(y=y_1;y <= y_2;++y)
++ {
++  row=&E.row[y];
++  start=(y == y_1) ? x_1 : 0;
++  end=(y == y_2) ? x_2 : row->size;
++
++  if(end > start)
++  {
++   memcpy(deleted_text+pos,&row->characters[start],end-start);
++   pos+=(end-start);
++  }
++  if(y < y_2)
++  {
++   deleted_text[pos]='\n';
++   ++pos;
++  }
++ }
++
++ actions action;
++ memset(&action,0,sizeof(action));
++ action.type=USER_ACTION_RANGE_DELETE;
++ action.c_x=x_1;
++ action.c_y=y_1;
++ action.c_x_end=x_2;
++ action.c_y_end=y_2;
++ action.row_text=deleted_text;
++ action.row_len=total;
++ undo_push(&action);
++
++ delete_char_range(x_1,y_1,x_2,y_2);
++
++ E.c_x=x_1;
++ E.c_y=y_1;
++ E.dirty=1;
++}
++
++static void vim_delete_lines(int32_t count)
++{
++ if(E.num_rows == 0)
++ {
++  return;
++ }
++ if(count < 1)
++ {
++  count=1;
++ }
++
++ int32_t start_y=E.c_y;
++ int32_t end_y=start_y+count-1;
++
++ if(end_y >= E.num_rows)
++ {
++  end_y=E.num_rows-1;
++ }
++
++ uint32_t total=0;
++ int32_t y=0;
++
++ for(y=start_y;y <= end_y;++y)
++ {
++  total+=E.row[y].size+1;
++ }
++
++ free(clipboard_buffer);
++ clipboard_buffer=malloc(total > 0 ? total : 1);
++
++ if(clipboard_buffer == NULL)
++ {
++  clipboard_len=0;
++ }
++ else
++ {
++  uint32_t pos=0;
++
++  for(y=start_y;y <= end_y;++y)
++  {
++   memcpy(clipboard_buffer+pos,E.row[y].characters,E.row[y].size);
++   pos+=E.row[y].size;
++   clipboard_buffer[pos]='\n';
++   ++pos;
++  }
++  clipboard_len=total;
++  clipboard_row_mode=1;
++  osc52_copy(clipboard_buffer,clipboard_len);
++ }
++
++ for(y=start_y;y <= end_y;++y)
++ {
++  actions action;
++  memset(&action,0,sizeof(action));
++  e_row* row=&E.row[start_y];
++
++  action.type=USER_ACTION_ROW_DELETE;
++  action.c_x=0;
++  action.c_y=start_y;
++  action.row_len=row->size;
++  action.row_text=row->size > 0 ? malloc(row->size) : NULL;
++
++  if(action.row_text != NULL)
++  {
++   memcpy(action.row_text,row->characters,row->size);
++   undo_push(&action);
++  }
++  else if(row->size == 0)
++  {
++   undo_push(&action);
++  }
++  else
++  {
++   set_status_message(ERROR_MSG_COLOR,"Low memory: row deleted, not added to undo history");
++  }
++
++  del_row(start_y);
++ }
++
++ E.c_x=0;
++
++ if(E.c_y >= E.num_rows && E.num_rows > 0)
++ {
++  E.c_y=E.num_rows-1;
++ }
++ E.dirty=1;
++}
++
++static void vim_change_word(int32_t count,char kind)
++{
++ int32_t i=0;
++ int32_t start_x=E.c_x;
++ int32_t start_y=E.c_y;
++
++ if(kind == 'e')
++ {
++  E.select_mode=SELECT_CHAR;
++  E.select_anchor_x=start_x;
++  E.select_anchor_y=start_y;
++
++  for(i=0;i < count;++i)
++  {
++   motion_word_end();
++  }
++
++  copy_selection();
++  delete_selection();
++  E.select_mode=SELECT_NONE;
++ }
++ else
++ {
++  for(i=0;i < count;++i)
++  {
++   motion_word_backward();
++  }
++
++  delete_range_with_undo(E.c_x,E.c_y,start_x,start_y);
++ }
++
++ E.mode=MODE_INSERT;
++}
++
++static void vim_replace_char(uint16_t new_c,int32_t count)
++{
++ if(E.c_y >= E.num_rows || new_c < 32 || new_c >= ASCII_CHAR_LIMIT)
++ {
++  return;
++ }
++
++ int32_t i=0;
++
++ for(i=0;i < count;++i)
++ {
++  e_row* row=&E.row[E.c_y];
++
++  if(E.c_x >= row->size)
++  {
++   break;
++  }
++
++  actions del_action;
++  memset(&del_action,0,sizeof(del_action));
++
++  del_action.type=USER_ACTION_DEL_CHAR;
++  del_action.c_x=E.c_x+1;
++  del_action.c_y=E.c_y;
++  del_action.c_len=1;
++  del_action.c[0]=row->characters[E.c_x];
++  del_action.row_text=NULL;
++  undo_push(&del_action);
++  row_del_char(row,E.c_x);
++
++  actions ins_action;
++  memset(&ins_action,0,sizeof(ins_action));
++
++  ins_action.type=USER_ACTION_INSERT_CHAR;
++  ins_action.c_x=E.c_x;
++  ins_action.c_y=E.c_y;
++  ins_action.c[0]=(char)new_c;
++  ins_action.c_len=1;
++  ins_action.row_text=NULL;
++  undo_push(&ins_action);
++  row_insert_char(row,E.c_x,new_c);
++
++  ++E.c_x;
++ }
++
++ if(E.c_x > 0)
++ {
++  --E.c_x;
++ }
++ E.dirty=1;
++}
++
++static void vim_substitute_chars(int32_t count)
++{
++ if(E.c_y >= E.num_rows)
++ {
++  E.mode=MODE_INSERT;
++  return;
++ }
++
++ e_row* row=&E.row[E.c_y];
++ int32_t n=count;
++
++ if(E.c_x+n > row->size)
++ {
++  n=row->size-E.c_x;
++ }
++
++ int32_t i=0;
++
++ for(i=0;i < n;++i)
++ {
++  actions action;
++  memset(&action,0,sizeof(action));
++
++  action.type=USER_ACTION_DEL_CHAR;
++  action.c_x=E.c_x+1;
++  action.c_y=E.c_y;
++  action.c_len=1;
++  action.c[0]=row->characters[E.c_x];
++  action.row_text=NULL;
++  undo_push(&action);
++  row_del_char(row,E.c_x);
++ }
++
++ E.dirty=1;
++ E.mode=MODE_INSERT;
++}
++
++static void vim_paste_after()
++{
++ if(clipboard_buffer == NULL || clipboard_len == 0)
++ {
++  return;
++ }
++
++ if(clipboard_row_mode)
++ {
++  paste_clipboard();
++  return;
++ }
++
++ if(E.c_y < E.num_rows && E.c_x < E.row[E.c_y].size)
++ {
++  E.c_x+=get_utf8_char_placement_length(&E.row[E.c_y],E.c_x);
++ }
++ paste_clipboard();
++}
++
++static void vim_paste_before()
++{
++ if(clipboard_buffer == NULL || clipboard_len == 0)
++ {
++  return;
++ }
++
++ if(clipboard_row_mode)
++ {
++  E.c_y-=1;
++  paste_clipboard();
++  return;
++ }
++ paste_clipboard();
++}
++
++static void vim_command_prompt()
++{
++ char* cmd=prompt(DEFAULT_MSG_COLOR,":%s",NULL);
++
++ if(cmd == NULL)
++ {
++  return;
++ }
++
++ if(strcmp(cmd,"w") == 0)
++ {
++  save_file();
++ }
++ else if(strcmp(cmd,"wq") == 0)
++ {
++  save_file();
++  write_all(STDOUT_FILENO,"\x1b[2J",4);
++  write_all(STDOUT_FILENO,"\x1b[H",3);
++  exit(0);
++ }
++ else if(strcmp(cmd,"q!") == 0)
++ {
++  write_all(STDOUT_FILENO,"\x1b[2J",4);
++  write_all(STDOUT_FILENO,"\x1b[H",3);
++  exit(0);
++ }
++ else if(strcmp(cmd,"q") == 0)
++ {
++  if(E.dirty)
++  {
++   set_status_message(ERROR_MSG_COLOR,"WARNING, file has unsaved changes, use :wq to save or :q! to force quit.");
++  }
++  else
++  {
++   write_all(STDOUT_FILENO,"\x1b[2J",4);
++   write_all(STDOUT_FILENO,"\x1b[H",3);
++   exit(0);
++  }
++ }
++ else
++ {
++  set_status_message(ERROR_MSG_COLOR,"Unknown command: %s",cmd);
++ }
++
++ free(cmd);
++}
++
++void process_keypress()
++{
++ static int8_t quit_times=QUIT_TIMES;
++ static int8_t open_times=QUIT_TIMES;
++ static int8_t refresh_times=QUIT_TIMES;
++ static char utf8_buf[4];
++ static int utf8_len=0;
++ static int utf8_expected=0;
++ static uint8_t v_pending=0;
++ static int32_t v_count=0;
++ actions action;
++ memset(&action,0,sizeof(action));
++ uint16_t c=read_key();
++
++  if(c >= 1000 || c < 32 || c == 127)
++  {
++   utf8_len=0;
++   utf8_expected=0;
++  }
++
++ if(E.mode == MODE_NORMAL && v_pending != 0)
++ {
++  uint8_t op=v_pending;
++  int32_t v_n=(v_count > 0) ? v_count : 1;
++  v_pending=0;
++  v_count=0;
++
++  if(op == 'd' && c == 'd')
++  {
++   vim_delete_lines(v_n);
++  }
++  else if(op == 'g' && c == 'g')
++  {
++   E.saved_r_x=-1;
++   E.c_x=0;
++   E.c_y=v_n-1;
++
++   if(E.c_y >= E.num_rows)
++   {
++    E.c_y=(E.num_rows > 0) ? E.num_rows-1 : 0;
++   }
++   if(E.c_y < 0)
++   {
++    E.c_y=0;
++   }
++  }
++  else if(op == 'c' && (c == 'w' || c == 'e'))
++  {
++   vim_change_word(v_n,'e');
++  }
++  else if(op == 'c' && c == 'b')
++  {
++   vim_change_word(v_n,'b');
++  }
++  else if(op == 'r' && c != '\x1b' && c < ASCII_CHAR_LIMIT)
++  {
++   vim_replace_char(c,v_n);
++  }
++  return;
++ }
++
++ switch(c)
++ {
++  case RESIZE_KEY:
++  {
++   window_resized=0;
++
++   if(get_window_size(&E.term_rows,&E.screen_cols) == -1)
++   {
++    die("get_window_size [process_keypress]");
++   }
++   ++E.wrap_generation;
++   return;
++  }
++  break;
++
++  case '\r':
++  {
++   if(E.mode != MODE_INSERT)
++   {
++    return;
++   }
++
++   action.type=USER_ACTION_INSERT_NEWLINE;
++   action.c_x=E.c_x;
++   action.c_y=E.c_y;
++   action.row_text=NULL;
++   undo_push(&action);
++   insert_new_line();
++  }
++  break;
++
++  case CTRL_KEY('q'):
++  {
++   if(E.dirty && quit_times > 0)
++   {
++    set_status_message(ERROR_MSG_COLOR,"WARNING, File has unsaved changes, press Ctrl+q %d more times to quit.",quit_times);
++    --quit_times;
++    return;
++   }
++
++   write_all(STDOUT_FILENO,"\x1b[2J",4);
++   write_all(STDOUT_FILENO,"\x1b[H",3);
++
++   exit(0);
++  }
++  break;
++
++  case CTRL_KEY('s'):
++  {
++   save_file();
++  }
++  break;
++
++  case CTRL_KEY('o'):
++  {
++   if(E.dirty && open_times > 0)
++   {
++    set_status_message(ERROR_MSG_COLOR,"WARNING, File has unsaved changes, press Ctrl+o %d more times to discard and open another file.",open_times);
++    --open_times;
++    return;
++   }
++
++   char start_dir[4096]=".";
++
++   if(E.file_name != NULL)
++   {
++    snprintf(start_dir,sizeof(start_dir),"%s",E.file_name);
++
++    char* slash=strrchr(start_dir,BROWSE_SEP);
++
++    if(slash)
++    {
++     *slash='\0';
++    }
++    else
++    {
++     snprintf(start_dir,sizeof(start_dir),".");
++    }
++   }
++
++   char* selected=browse_for_file(start_dir);
++
++   if(selected != NULL)
++   {
++    reset_editor_for_new_file();
++    open_file(selected);
++    free(selected);
++   }
++   return;
++  }
++  break;
++
++  case CTRL_KEY('p'):
++  {
++   if(E.file_name == NULL)
++   {
++    set_status_message(ERROR_MSG_COLOR,"Nothing to refresh, file was never saved");
++    return;
++   }
++
++   if(E.dirty && refresh_times > 0 && !E.file_modified_externally)
++   {
++    set_status_message(ERROR_MSG_COLOR,"WARNING, File has unsaved changes, press Ctrl+p %d more times to discard them and refresh.",refresh_times);
++    --refresh_times;
++    return;
++   }
++
++   char* current_file_name=strdup(E.file_name);
++   reset_editor_for_new_file();
++   open_file(current_file_name);
++   free(current_file_name);
++   set_status_message(SUCCESS_MSG_COLOR,"File content refreshed from disk");
++   return;
++  }
++  break;
++
++  case HOME_KEY:
++  {
++   E.saved_r_x=-1;
++   E.c_x=0;
++  }
++  break;
++
++  case END_KEY:
++  {
++   E.saved_r_x=-1;
++
++   if(E.c_y < E.num_rows)
++   {
++    E.c_x=E.row[E.c_y].size;
++   }
++  }
++  break;
++
++  case CTRL_KEY('f'):
++  {
++   find();
++  }
++  break;
++
++  case CTRL_KEY('w'):
++  {
++   search_and_replace();
++  }
++  break;
++
++  case CTRL_KEY('g'):
++  {
++   go_to_line();
++  }
++  break;
++
++  case CTRL_KEY('z'):
++  {
++   undo();
++  }
++  break;
++
++  case CTRL_KEY('r'):
++  {
++   redo();
++  }
++  break;
++
++  case CTRL_KEY('e'):
++  {
++   if(E.select_mode != SELECT_NONE)
++   {
++    E.select_mode=SELECT_NONE;
++   }
++   else
++   {
++    E.select_mode=SELECT_CHAR;
++    E.select_anchor_x=E.c_x;
++    E.select_anchor_y=E.c_y;
++   }
++   return;
++  }
++  break;
++
++  case CTRL_KEY('i'):
++  {
++   if(E.mode == MODE_INSERT)
++   {
++    E.mode=MODE_NORMAL;
++   }
++   else
++   {
++    E.mode=MODE_INSERT;
++   }
++   return;
++  }
++  break;
++
++  case CTRL_KEY('c'):
++  {
++   if(!E.select_mode)
++   {
++    E.select_mode=SELECT_ROW;
++    E.select_anchor_x=E.c_x;
++    E.select_anchor_y=E.c_y;
++   }
++   copy_selection();
++   E.select_mode=SELECT_NONE;
++   return;
++  }
++  break;
++
++  case CTRL_KEY('x'):
++  {
++   if(!E.select_mode)
++   {
++    E.select_mode=SELECT_ROW;
++    E.select_anchor_x=E.c_x;
++    E.select_anchor_y=E.c_y;
++   }
++   copy_selection();
++   delete_selection();
++   E.select_mode=SELECT_NONE;
++  }
++  break;
++
++  case CTRL_KEY('v'):
++  {
++   paste_clipboard();
++  }
++  break;
++
++  case BRACKETED_PASTE:
++  {
++   if(paste_stream_buffer != NULL && paste_stream_len > 0)
++   {
++    int32_t start_x=E.c_x;
++    int32_t start_y=E.c_y;
++    uint32_t i=0;
++    uint32_t clean_len=0;
++
++    for(i=0;i < paste_stream_len;++i)
++    {
++     char p_c=paste_stream_buffer[i];
++
++     if(p_c == '\n' || p_c == '\t' || ((unsigned char)p_c >= 32 && (unsigned char)p_c != 127))
++     {
++      paste_stream_buffer[clean_len++]=p_c;
++     }
++    }
++
++    insert_text_range(paste_stream_buffer,clean_len);
++
++    action.type=USER_ACTION_RANGE_INSERT;
++    action.c_x=start_x;
++    action.c_y=start_y;
++    action.c_x_end=E.c_x;
++    action.c_y_end=E.c_y;
++    action.row_text=malloc(clean_len);
++
++    if(action.row_text != NULL || clean_len == 0)
++    {
++     if(clean_len > 0)
++     {
++      memcpy(action.row_text,paste_stream_buffer,clean_len);
++     }
++     action.row_len=clean_len;
++     undo_push(&action);
++    }
++    else
++    {
++     set_status_message(ERROR_MSG_COLOR,"Low memory: paste not added to undo history");
++    }
++   }
++
++   free(paste_stream_buffer);
++   paste_stream_buffer=NULL;
++   paste_stream_len=0;
++  }
++  break;
++
++  case BACKSPACE:
++  case DEL_KEY:
++  {
++   if(E.mode != MODE_INSERT)
++   {
++    return;
++   }
++
++   if(c == DEL_KEY)
++   {
++    move_cursor(ARROW_RIGHT);
++   }
++
++   if(E.c_y < E.num_rows && !(E.c_x == 0 && E.c_y == 0))
++   {
++    action.row_text=NULL;
++
++    if(E.c_x > 0)
++    {
++     e_row* row=&E.row[E.c_y];
++     int32_t start_c_x=snap_to_utf8_start(row,E.c_x-1);
++
++     action.type=USER_ACTION_DEL_CHAR;
++     action.c_x=E.c_x;
++     action.c_y=E.c_y;
++     action.c_len=(uint8_t)(E.c_x-start_c_x);
++     memcpy(action.c,&row->characters[start_c_x],action.c_len);
++     undo_push(&action);
++    }
++    else
++    {
++     action.type=USER_ACTION_JOIN_LINES;
++     action.c_x=0;
++     action.c_y=E.c_y;
++     action.join_col=E.row[E.c_y-1].size;
++     action.row_len=E.row[E.c_y].size;
++     action.row_text=action.row_len > 0 ? malloc(action.row_len) : NULL;
++
++     if(action.row_text != NULL)
++     {
++      memcpy(action.row_text,E.row[E.c_y].characters,action.row_len);
++      undo_push(&action);
++     }
++     else if(action.row_len == 0)
++     {
++      undo_push(&action);
++     }
++     else
++     {
++      set_status_message(ERROR_MSG_COLOR,"Low memory: join not added to undo history");
++     }
++    }
++   }
++   del_char();
++  }
++  break;
++
++  case PAGE_UP:
++  case PAGE_DOWN:
++  {
++   if(c == PAGE_UP)
++   {
++    E.c_y=E.row_off;
++   }
++   else if(c == PAGE_DOWN)
++   {
++    E.c_y=E.row_off+E.screen_rows-1;
++
++    if(E.c_y > E.num_rows)
++    {
++     E.c_y=E.num_rows;
++    }
++   }
++
++   int16_t times=E.screen_rows;
++
++   while(times--)
++   {
++    if(c == PAGE_UP)
++    {
++     move_cursor(ARROW_UP);
++    }
++    else
++    {
++     move_cursor(ARROW_DOWN);
++    }
++   }
++  }
++  break;
++
++  case MOUSE_WHEEL_UP:
++  case MOUSE_WHEEL_DOWN:
++  {
++   uint8_t times=4;
++
++   while(times--)
++   {
++    if(c == MOUSE_WHEEL_UP)
++    {
++     move_cursor(ARROW_UP);
++    }
++    else
++    {
++     move_cursor(ARROW_DOWN);
++    }
++   }
++  }
++  break;
++
++  case MOUSE_LEFT_PRESS:
++  {
++   int32_t click_c_x=0;
++   int32_t click_c_y=0;
++
++   mouse_to_cursor(g_mouse_x,g_mouse_y,&click_c_x,&click_c_y);
++
++   uint64_t now_ms=get_ms_ticks();
++   uint8_t is_double=(s_last_click_c_x == click_c_x && s_last_click_c_y == click_c_y && (now_ms-s_last_click_ms) < 500);
++
++   s_last_click_c_x=click_c_x;
++   s_last_click_c_y=click_c_y;
++   s_last_click_ms=now_ms;
++
++   E.saved_r_x=-1;
++   E.c_x=click_c_x;
++   E.c_y=click_c_y;
++
++   if(is_double)
++   {
++    select_word_at(click_c_x,click_c_y);
++   }
++   else
++   {
++    E.select_mode=SELECT_CHAR;
++    E.select_anchor_x=click_c_x;
++    E.select_anchor_y=click_c_y;
++   }
++  }
++  break;
++
++  case MOUSE_LEFT_DRAG:
++  {
++   int32_t drag_c_x=0;
++   int32_t drag_c_y=0;
++
++   mouse_to_cursor(g_mouse_x,g_mouse_y,&drag_c_x,&drag_c_y);
++
++   E.saved_r_x=-1;
++
++   if(E.select_mode == SELECT_NONE)
+    {
+-    return;
++    E.select_mode=SELECT_CHAR;
++    E.select_anchor_x=drag_c_x;
++    E.select_anchor_y=drag_c_y;
+    }
+ 
+-   action.type=USER_ACTION_INSERT_NEWLINE;
+-   action.c_x=E.c_x;
+-   action.c_y=E.c_y;
+-   action.row_text=NULL;
+-   undo_push(&action);
+-   insert_new_line();
++   E.c_x=drag_c_x;
++   E.c_y=drag_c_y;
+   }
+   break;
+ 
+-  case CTRL_KEY('q'):
++  case MOUSE_LEFT_RELEASE:
+   {
+-   if(E.dirty && quit_times > 0)
++   if(E.select_mode == SELECT_CHAR && E.select_anchor_x == E.c_x && E.select_anchor_y == E.c_y)
+    {
+-    set_status_message(ERROR_MSG_COLOR,"WARNING, File has unsaved changes, press Ctrl+q %d more times to quit.",quit_times);
+-    --quit_times;
+-    return;
++    E.select_mode=SELECT_NONE;
+    }
+-
+-   write_all(STDOUT_FILENO,"\x1b[2J",4);
+-   write_all(STDOUT_FILENO,"\x1b[H",3);
+-
+-   exit(0);
+   }
+   break;
+ 
+-  case CTRL_KEY('s'):
++  case MOUSE_MIDDLE_CLICK:
+   {
+-   save_file();
++   int32_t paste_c_x=0;
++   int32_t paste_c_y=0;
++
++   mouse_to_cursor(g_mouse_x,g_mouse_y,&paste_c_x,&paste_c_y);
++
++   E.saved_r_x=-1;
++   E.c_x=paste_c_x;
++   E.c_y=paste_c_y;
++
++   paste_clipboard();
+   }
+   break;
+ 
+-  case CTRL_KEY('o'):
++  case MOUSE_RIGHT_PRESS:
+   {
+-   if(E.dirty && open_times > 0)
++   if(E.select_mode != SELECT_NONE)
+    {
+-    set_status_message(ERROR_MSG_COLOR,"WARNING, File has unsaved changes, press Ctrl+o %d more times to discard and open another file.",open_times);
+-    --open_times;
+-    return;
++    copy_selection();
++    E.select_mode=SELECT_NONE;
+    }
++  }
++  break;
+ 
+-   char start_dir[4096]=".";
+-
+-   if(E.file_name != NULL)
++  case 'h':
++  {
++   if(E.mode == MODE_NORMAL)
+    {
+-    snprintf(start_dir,sizeof(start_dir),"%s",E.file_name);
++    int32_t n=(v_count > 0) ? v_count : 1;
++    v_count=0;
+ 
+-    char* slash=strrchr(start_dir,BROWSE_SEP);
+-
+-    if(slash)
+-    {
+-     *slash='\0';
+-    }
+-    else
++    while(n-- > 0)
+     {
+-     snprintf(start_dir,sizeof(start_dir),".");
++     move_cursor(ARROW_LEFT);
+     }
+    }
+-
+-   char* selected=browse_for_file(start_dir);
+-
+-   if(selected != NULL)
++   else
+    {
+-    reset_editor_for_new_file();
+-    open_file(selected);
+-    free(selected);
++    insert_plain_char(c);
+    }
+-   return;
+   }
+   break;
+ 
+-  case CTRL_KEY('p'):
++  case 'l':
+   {
+-   if(E.file_name == NULL)
++   if(E.mode == MODE_NORMAL)
+    {
+-    set_status_message(ERROR_MSG_COLOR,"Nothing to refresh, file was never saved");
+-    return;
+-   }
++    int32_t n=(v_count > 0) ? v_count : 1;
++    v_count=0;
+ 
+-   if(E.dirty && refresh_times > 0 && !E.file_modified_externally)
++    while(n-- > 0)
++    {
++     move_cursor(ARROW_RIGHT);
++    }
++   }
++   else
+    {
+-    set_status_message(ERROR_MSG_COLOR,"WARNING, File has unsaved changes, press Ctrl+p %d more times to discard them and refresh.",refresh_times);
+-    --refresh_times;
+-    return;
++    insert_plain_char(c);
+    }
+-
+-   char* current_file_name=strdup(E.file_name);
+-   reset_editor_for_new_file();
+-   open_file(current_file_name);
+-   free(current_file_name);
+-   set_status_message(SUCCESS_MSG_COLOR,"File content refreshed from disk");
+-   return;
+   }
+   break;
+ 
+-  case HOME_KEY:
++  case 'j':
+   {
+-   E.saved_r_x=-1;
+-   E.c_x=0;
++   if(E.mode == MODE_NORMAL)
++   {
++    int32_t n=(v_count > 0) ? v_count : 1;
++    v_count=0;
++
++    while(n-- > 0)
++    {
++     move_cursor(ARROW_DOWN);
++    }
++   }
++   else
++   {
++    insert_plain_char(c);
++   }
+   }
+   break;
+ 
+-  case END_KEY:
++  case 'k':
+   {
+-   E.saved_r_x=-1;
++   if(E.mode == MODE_NORMAL)
++   {
++    int32_t n=(v_count > 0) ? v_count : 1;
++    v_count=0;
+ 
+-   if(E.c_y < E.num_rows)
++    while(n-- > 0)
++    {
++     move_cursor(ARROW_UP);
++    }
++   }
++   else
+    {
+-    E.c_x=E.row[E.c_y].size;
++    insert_plain_char(c);
+    }
+   }
+   break;
+ 
+-  case CTRL_KEY('f'):
++  case 'w':
+   {
+-   find();
+-  }
+-  break;
++   if(E.mode == MODE_NORMAL)
++   {
++    int32_t n=(v_count > 0) ? v_count : 1;
++    v_count=0;
+ 
+-  case CTRL_KEY('w'):
+-  {
+-   search_and_replace();
++    while(n-- > 0)
++    {
++     motion_word_forward();
++    }
++   }
++   else
++   {
++    insert_plain_char(c);
++   }
+   }
+   break;
+ 
+-  case CTRL_KEY('g'):
++  case 'e':
+   {
+-   go_to_line();
++   if(E.mode == MODE_NORMAL)
++   {
++    int32_t n=(v_count > 0) ? v_count : 1;
++    v_count=0;
++
++    while(n-- > 0)
++    {
++     motion_word_end();
++    }
++   }
++   else
++   {
++    insert_plain_char(c);
++   }
+   }
+   break;
+ 
+-  case CTRL_KEY('z'):
++  case 'b':
+   {
+-   undo();
++   if(E.mode == MODE_NORMAL)
++   {
++    int32_t n=(v_count > 0) ? v_count : 1;
++    v_count=0;
++
++    while(n-- > 0)
++    {
++     motion_word_backward();
++    }
++   }
++   else
++   {
++    insert_plain_char(c);
++   }
+   }
+   break;
+ 
+-  case CTRL_KEY('r'):
++  case '0':
+   {
+-   redo();
++   if(E.mode == MODE_NORMAL)
++   {
++    if(v_count > 0)
++    {
++     v_count=v_count*10;
++     return;
++    }
++    E.saved_r_x=-1;
++    E.c_x=0;
++   }
++   else
++   {
++    insert_plain_char(c);
++   }
+   }
+   break;
+ 
+-  case CTRL_KEY('e'):
++  case '1':
++  case '2':
++  case '3':
++  case '4':
++  case '5':
++  case '6':
++  case '7':
++  case '8':
++  case '9':
+   {
+-   if(E.select_mode != SELECT_NONE)
++   if(E.mode == MODE_NORMAL)
+    {
+-    E.select_mode=SELECT_NONE;
++    v_count=v_count*10+(c-'0');
++    return;
+    }
+    else
+    {
+-    E.select_mode=SELECT_CHAR;
+-    E.select_anchor_x=E.c_x;
+-    E.select_anchor_y=E.c_y;
++    insert_plain_char(c);
+    }
+-   return;
+   }
+   break;
+ 
+-  case CTRL_KEY('i'):
++  case '$':
+   {
+-   if(E.mode == MODE_INSERT)
++   if(E.mode == MODE_NORMAL)
+    {
+-    E.mode=MODE_NORMAL;
++    v_count=0;
++    E.saved_r_x=-1;
++
++    if(E.c_y < E.num_rows)
++    {
++     E.c_x=E.row[E.c_y].size;
++    }
+    }
+    else
+    {
+-    E.mode=MODE_INSERT;
++    insert_plain_char(c);
+    }
+-   return;
+   }
+   break;
+ 
+-  case CTRL_KEY('c'):
++  case 'g':
+   {
+-   if(!E.select_mode)
++   if(E.mode == MODE_NORMAL)
+    {
+-    E.select_mode=SELECT_ROW;
+-    E.select_anchor_x=E.c_x;
+-    E.select_anchor_y=E.c_y;
++    v_pending='g';
++    return;
++   }
++   else
++   {
++    insert_plain_char(c);
+    }
+-   copy_selection();
+-   E.select_mode=SELECT_NONE;
+-   return;
+   }
+   break;
+ 
+-  case CTRL_KEY('x'):
++  case 'G':
+   {
+-   if(!E.select_mode)
++   if(E.mode == MODE_NORMAL)
+    {
+-    E.select_mode=SELECT_ROW;
+-    E.select_anchor_x=E.c_x;
+-    E.select_anchor_y=E.c_y;
++    E.saved_r_x=-1;
++    E.c_x=0;
++
++    if(v_count > 0)
++    {
++     E.c_y=v_count-1;
++
++     if(E.c_y >= E.num_rows)
++     {
++      E.c_y=(E.num_rows > 0) ? E.num_rows-1 : 0;
++     }
++    }
++    else
++    {
++     E.c_y=(E.num_rows > 0) ? E.num_rows-1 : 0;
++    }
++    v_count=0;
++   }
++   else
++   {
++    insert_plain_char(c);
+    }
+-   copy_selection();
+-   delete_selection();
+-   E.select_mode=SELECT_NONE;
+   }
+   break;
+ 
+-  case CTRL_KEY('v'):
++  case 'i':
+   {
+-   paste_clipboard();
++   if(E.mode == MODE_NORMAL)
++   {
++    v_count=0;
++    E.mode=MODE_INSERT;
++    return;
++   }
++   else
++   {
++    insert_plain_char(c);
++   }
+   }
+   break;
+ 
+-  case BRACKETED_PASTE:
++  case 'a':
+   {
+-   if(paste_stream_buffer != NULL && paste_stream_len > 0)
++   if(E.mode == MODE_NORMAL)
+    {
+-    int32_t start_x=E.c_x;
+-    int32_t start_y=E.c_y;
+-    uint32_t i=0;
+-    uint32_t clean_len=0;
++    v_count=0;
++    E.saved_r_x=-1;
+ 
+-    for(i=0;i < paste_stream_len;++i)
++    if(E.c_y < E.num_rows && E.c_x < E.row[E.c_y].size)
+     {
+-     char p_c=paste_stream_buffer[i];
+-
+-     if(p_c == '\n' || p_c == '\t' || ((unsigned char)p_c >= 32 && (unsigned char)p_c != 127))
+-     {
+-      paste_stream_buffer[clean_len++]=p_c;
+-     }
++     E.c_x+=get_utf8_char_placement_length(&E.row[E.c_y],E.c_x);
+     }
++    E.mode=MODE_INSERT;
++    return;
++   }
++   else
++   {
++    insert_plain_char(c);
++   }
++  }
++  break;
+ 
+-    insert_text_range(paste_stream_buffer,clean_len);
+-
+-    action.type=USER_ACTION_RANGE_INSERT;
+-    action.c_x=start_x;
+-    action.c_y=start_y;
+-    action.c_x_end=E.c_x;
+-    action.c_y_end=E.c_y;
+-    action.row_text=malloc(clean_len);
++  case 'I':
++  {
++   if(E.mode == MODE_NORMAL)
++   {
++    v_count=0;
++    E.saved_r_x=-1;
+ 
+-    if(action.row_text != NULL || clean_len == 0)
++    if(E.c_y < E.num_rows)
+     {
+-     if(clean_len > 0)
++     e_row* row=&E.row[E.c_y];
++     int32_t x=0;
++
++     while(x < row->size && isspace((unsigned char)row->characters[x]))
+      {
+-      memcpy(action.row_text,paste_stream_buffer,clean_len);
++      ++x;
+      }
+-     action.row_len=clean_len;
+-     undo_push(&action);
++     E.c_x=x;
+     }
+     else
+     {
+-     set_status_message(ERROR_MSG_COLOR,"Low memory: paste not added to undo history");
++     E.c_x=0;
+     }
++    E.mode=MODE_INSERT;
++    return;
++   }
++   else
++   {
++    insert_plain_char(c);
+    }
+-
+-   free(paste_stream_buffer);
+-   paste_stream_buffer=NULL;
+-   paste_stream_len=0;
+   }
+   break;
+ 
+-  case BACKSPACE:
+-  case DEL_KEY:
++  case 'A':
+   {
+-   if(E.mode != MODE_INSERT)
++   if(E.mode == MODE_NORMAL)
+    {
++    v_count=0;
++    E.saved_r_x=-1;
++
++    if(E.c_y < E.num_rows)
++    {
++     E.c_x=E.row[E.c_y].size;
++    }
++    E.mode=MODE_INSERT;
+     return;
+    }
+-
+-   if(c == DEL_KEY)
++   else
+    {
+-    move_cursor(ARROW_RIGHT);
++    insert_plain_char(c);
+    }
++  }
++  break;
+ 
+-   if(E.c_y < E.num_rows && !(E.c_x == 0 && E.c_y == 0))
++  case 'o':
++  {
++   if(E.mode == MODE_NORMAL)
+    {
+-    action.row_text=NULL;
++    v_count=0;
++    E.saved_r_x=-1;
+ 
+-    if(E.c_x > 0)
++    if(E.c_y < E.num_rows)
+     {
+-     e_row* row=&E.row[E.c_y];
+-     int32_t start_c_x=snap_to_utf8_start(row,E.c_x-1);
+-
+-     action.type=USER_ACTION_DEL_CHAR;
+-     action.c_x=E.c_x;
+-     action.c_y=E.c_y;
+-     action.c_len=(uint8_t)(E.c_x-start_c_x);
+-     memcpy(action.c,&row->characters[start_c_x],action.c_len);
+-     undo_push(&action);
++     E.c_x=E.row[E.c_y].size;
+     }
+     else
+     {
+-     action.type=USER_ACTION_JOIN_LINES;
+-     action.c_x=0;
+-     action.c_y=E.c_y;
+-     action.join_col=E.row[E.c_y-1].size;
+-     action.row_len=E.row[E.c_y].size;
+-     action.row_text=action.row_len > 0 ? malloc(action.row_len) : NULL;
+-
+-     if(action.row_text != NULL)
+-     {
+-      memcpy(action.row_text,E.row[E.c_y].characters,action.row_len);
+-      undo_push(&action);
+-     }
+-     else if(action.row_len == 0)
+-     {
+-      undo_push(&action);
+-     }
+-     else
+-     {
+-      set_status_message(ERROR_MSG_COLOR,"Low memory: join not added to undo history");
+-     }
++     E.c_x=0;
+     }
++
++    action.type=USER_ACTION_INSERT_NEWLINE;
++    action.c_x=E.c_x;
++    action.c_y=E.c_y;
++    action.row_text=NULL;
++    undo_push(&action);
++    insert_new_line();
++    E.mode=MODE_INSERT;
++    return;
++   }
++   else
++   {
++    insert_plain_char(c);
+    }
+-   del_char();
+   }
+   break;
+ 
+-  case PAGE_UP:
+-  case PAGE_DOWN:
++  case 'O':
+   {
+-   if(c == PAGE_UP)
++   if(E.mode == MODE_NORMAL)
+    {
+-    E.c_y=E.row_off;
++    v_count=0;
++    E.saved_r_x=-1;
++
++    action.type=USER_ACTION_ROW_INSERT;
++    action.c_x=0;
++    action.c_y=E.c_y;
++    action.row_len=0;
++    action.row_text=NULL;
++    undo_push(&action);
++    insert_row(E.c_y,"",0);
++    E.c_x=0;
++    E.mode=MODE_INSERT;
++    return;
+    }
+-   else if(c == PAGE_DOWN)
++   else
+    {
+-    E.c_y=E.row_off+E.screen_rows-1;
+-
+-    if(E.c_y > E.num_rows)
+-    {
+-     E.c_y=E.num_rows;
+-    }
++    insert_plain_char(c);
+    }
++  }
++  break;
+ 
+-   int16_t times=E.screen_rows;
+-
+-   while(times--)
++  case 'v':
++  {
++   if(E.mode == MODE_NORMAL)
+    {
+-    if(c == PAGE_UP)
++    v_count=0;
++
++    if(E.select_mode == SELECT_CHAR)
+     {
+-     move_cursor(ARROW_UP);
++     E.select_mode=SELECT_NONE;
+     }
+     else
+     {
+-     move_cursor(ARROW_DOWN);
++     E.select_mode=SELECT_CHAR;
++     E.select_anchor_x=E.c_x;
++     E.select_anchor_y=E.c_y;
+     }
++    return;
++   }
++   else
++   {
++    insert_plain_char(c);
+    }
+   }
+   break;
+ 
+-  case MOUSE_WHEEL_UP:
+-  case MOUSE_WHEEL_DOWN:
++  case 'V':
+   {
+-   uint8_t times=4;
+-
+-   while(times--)
++   if(E.mode == MODE_NORMAL)
+    {
+-    if(c == MOUSE_WHEEL_UP)
++    v_count=0;
++
++    if(E.select_mode == SELECT_ROW)
+     {
+-     move_cursor(ARROW_UP);
++     E.select_mode=SELECT_NONE;
+     }
+     else
+     {
+-     move_cursor(ARROW_DOWN);
++     E.select_mode=SELECT_ROW;
++     E.select_anchor_x=E.c_x;
++     E.select_anchor_y=E.c_y;
+     }
++    return;
++   }
++   else
++   {
++    insert_plain_char(c);
+    }
+   }
+   break;
+ 
+-  case MOUSE_LEFT_PRESS:
++  case 'd':
+   {
+-   int32_t click_c_x=0;
+-   int32_t click_c_y=0;
+-
+-   mouse_to_cursor(g_mouse_x,g_mouse_y,&click_c_x,&click_c_y);
+-
+-   uint64_t now_ms=get_ms_ticks();
+-   uint8_t is_double=(s_last_click_c_x == click_c_x && s_last_click_c_y == click_c_y && (now_ms-s_last_click_ms) < 500);
+-
+-   s_last_click_c_x=click_c_x;
+-   s_last_click_c_y=click_c_y;
+-   s_last_click_ms=now_ms;
+-
+-   E.saved_r_x=-1;
+-   E.c_x=click_c_x;
+-   E.c_y=click_c_y;
+-
+-   if(is_double)
++   if(E.mode == MODE_NORMAL)
+    {
+-    select_word_at(click_c_x,click_c_y);
++    if(E.select_mode != SELECT_NONE)
++    {
++     copy_selection();
++     delete_selection();
++     E.select_mode=SELECT_NONE;
++     v_count=0;
++    }
++    else
++    {
++     v_pending='d';
++    }
++    return;
+    }
+    else
+    {
+-    E.select_mode=SELECT_CHAR;
+-    E.select_anchor_x=click_c_x;
+-    E.select_anchor_y=click_c_y;
++    insert_plain_char(c);
+    }
+   }
+   break;
+ 
+-  case MOUSE_LEFT_DRAG:
++  case 'c':
+   {
+-   int32_t drag_c_x=0;
+-   int32_t drag_c_y=0;
+-
+-   mouse_to_cursor(g_mouse_x,g_mouse_y,&drag_c_x,&drag_c_y);
+-
+-   E.saved_r_x=-1;
+-
+-   if(E.select_mode == SELECT_NONE)
++   if(E.mode == MODE_NORMAL)
+    {
+-    E.select_mode=SELECT_CHAR;
+-    E.select_anchor_x=drag_c_x;
+-    E.select_anchor_y=drag_c_y;
++    if(E.select_mode != SELECT_NONE)
++    {
++     copy_selection();
++     delete_selection();
++     E.select_mode=SELECT_NONE;
++     v_count=0;
++     E.mode=MODE_INSERT;
++    }
++    else
++    {
++     v_pending='c';
++    }
++    return;
+    }
+-
+-   E.c_x=drag_c_x;
+-   E.c_y=drag_c_y;
+-  }
+-  break;
+-
+-  case MOUSE_LEFT_RELEASE:
+-  {
+-   if(E.select_mode == SELECT_CHAR && E.select_anchor_x == E.c_x && E.select_anchor_y == E.c_y)
++   else
+    {
+-    E.select_mode=SELECT_NONE;
++    insert_plain_char(c);
+    }
+   }
+   break;
+ 
+-  case MOUSE_MIDDLE_CLICK:
+-  {
+-   int32_t paste_c_x=0;
+-   int32_t paste_c_y=0;
+-
+-   mouse_to_cursor(g_mouse_x,g_mouse_y,&paste_c_x,&paste_c_y);
+-
+-   E.saved_r_x=-1;
+-   E.c_x=paste_c_x;
+-   E.c_y=paste_c_y;
+-
+-   paste_clipboard();
+-  }
+-  break;
+-
+-  case MOUSE_RIGHT_PRESS:
++  case 'r':
+   {
+-   if(E.select_mode != SELECT_NONE)
++   if(E.mode == MODE_NORMAL)
+    {
+-    copy_selection();
+-    E.select_mode=SELECT_NONE;
++    v_pending='r';
++    return;
++   }
++   else
++   {
++    insert_plain_char(c);
+    }
+   }
+   break;
+ 
+-  case 'w':
++  case 's':
+   {
+    if(E.mode == MODE_NORMAL)
+    {
+-    move_cursor(ARROW_UP);
++    vim_substitute_chars((v_count > 0) ? v_count : 1);
++    v_count=0;
++    return;
+    }
+    else
+    {
+-    E.saved_r_x=-1;
+-    action.type=USER_ACTION_INSERT_CHAR;
+-    action.c_x=E.c_x;
+-    action.c_y=E.c_y;
+-    action.c[0]=(char)c;
+-    action.c_len=1;
+-    action.row_text=NULL;
+-    undo_push(&action);
+-    insert_char(c);
++    insert_plain_char(c);
+    }
+   }
+   break;
+ 
+-  case 'a':
++  case 'p':
+   {
+    if(E.mode == MODE_NORMAL)
+    {
+-    move_cursor(ARROW_LEFT);
++    vim_paste_after();
++    v_count=0;
++    return;
+    }
+    else
+    {
+-    E.saved_r_x=-1;
+-    action.type=USER_ACTION_INSERT_CHAR;
+-    action.c_x=E.c_x;
+-    action.c_y=E.c_y;
+-    action.c[0]=(char)c;
+-    action.c_len=1;
+-    action.row_text=NULL;
+-    undo_push(&action);
+-    insert_char(c);
++    insert_plain_char(c);
+    }
+   }
+   break;
+ 
+-  case 's':
++  case 'P':
+   {
+    if(E.mode == MODE_NORMAL)
+    {
+-    move_cursor(ARROW_DOWN);
++    vim_paste_before();
++    v_count=0;
++    return;
+    }
+    else
+    {
+-    E.saved_r_x=-1;
+-    action.type=USER_ACTION_INSERT_CHAR;
+-    action.c_x=E.c_x;
+-    action.c_y=E.c_y;
+-    action.c[0]=(char)c;
+-    action.c_len=1;
+-    action.row_text=NULL;
+-    undo_push(&action);
+-    insert_char(c);
++    insert_plain_char(c);
+    }
+   }
+   break;
+ 
+-  case 'd':
++  case ':':
+   {
+    if(E.mode == MODE_NORMAL)
+    {
+-    move_cursor(ARROW_RIGHT);
++    v_count=0;
++    vim_command_prompt();
++    return;
+    }
+    else
+    {
+-    E.saved_r_x=-1;
+-    action.type=USER_ACTION_INSERT_CHAR;
+-    action.c_x=E.c_x;
+-    action.c_y=E.c_y;
+-    action.c[0]=(char)c;
+-    action.c_len=1;
+-    action.row_text=NULL;
+-    undo_push(&action);
+-    insert_char(c);
++    insert_plain_char(c);
+    }
+   }
+   break;

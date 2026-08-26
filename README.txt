@@ -36,7 +36,7 @@ cp rwx.c rwx_modified.c
 #edituje rwx_modified.c
 #kada sve radi što hoćemo na rwx_modified.c
 #radimo sledeće kako bi napravi i primeni zakrpu
-sh patch_code.sh gen rwx_modified.c rwx.c moja_zakrpa.diff
+sh patch_code.sh gen rwx.c rwx_modified.c moja_zakrpa.diff
 sh patch_code.sh apply moja_zakrpa.diff rwx.c
 sh compile.sh rwx.c
 
@@ -45,6 +45,6 @@ cp rwx.c rwx_modified.c
 ::edituje rwx_modified.c
 ::kada sve radi što hoćemo na rwx_modified.c
 ::radimo sledeće kako bi napravi i primeni zakrpu
-.\patch_code.bat gen rwx_modified.c rwx.c moja_zakrpa.diff
+.\patch_code.bat gen rwx.c rwx_modified.c moja_zakrpa.diff
 .\patch_code.bat apply moja_zakrpa.diff rwx.c
 .\compile.bat rwx.c

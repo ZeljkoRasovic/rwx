@@ -33,9 +33,9 @@ uninstall.bat
 # Modifikovanje
 Posix (Linux, MacOS, FreeBSD, OpenBSD, NetBSD):
 cp rwx.c rwx_modified.c
-# edituje rwx_modified.c
-# kada sve radi što hoćemo na rwx_modified.c
-# radimo sledeće kako bi napravi i primeni patch
+edituje rwx_modified.c
+kada sve radi što hoćemo na rwx_modified.c
+radimo sledeće kako bi napravi i primeni patch
 sh patch.sh gen rwx_modified.c rwx.c moja_zakrpa.diff
 sh patch.sh apply moja_zakrpa.diff rwx.c
 sh compile.sh rwx.c

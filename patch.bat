@@ -273,7 +273,7 @@ if !HAVE_PATCH! equ 0 (
 
 if !PATCH_APPLIED! equ 0 if !HAVE_GIT! equ 0 (
  if exist "!BACKUP_FILE!" copy /y "!BACKUP_FILE!" "%TARGET%" >nul
- git apply -p0 --whitespace=nowarn --ignore-space-change -- "!TMP_PATCH!" >"!PATCH_OUT!" 2>&1
+ git apply -p0 --no-index --whitespace=nowarn --ignore-space-change -- "!TMP_PATCH!" >"!PATCH_OUT!" 2>&1
  if !errorlevel! equ 0 (
   set "PATCH_APPLIED=1"
  ) else (

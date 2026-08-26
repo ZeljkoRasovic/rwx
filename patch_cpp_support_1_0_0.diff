@@ -1,0 +1,161 @@
+--- rwx.c	2026-08-26 10:28:05.861074891 +0200
++++ rwx_with_cpp.c	2026-08-26 10:25:36.425118269 +0200
+@@ -400,6 +400,148 @@
+  1, 3, 3, 3, 3, 3, 3, 3,
+ };
+ 
++const char* const CPP_H_extensions[]={".cpp",".cc",".cxx",".hpp",".hh",".hxx",".ii",".ixx",".ipp",".cppm",".tpp",NULL};
++
++const char* const CPP_H_keywords[]=
++{
++ "%:","%:%:","<%","%>","<:",":>","?\?<","?\?>","?\?(","?\?)","?\?!","?\?'","?\?-","?\?/","?\?=",
++ "alignas","alignof","and","and_eq","asm","__asm","__asm__","auto",
++ "atomic_cancel","atomic_commit","atomic_noexcept","__alignas_is_defined","__alignof_is_defined",
++ "bitand","bitor","bool","break","__bool_true_false_are_defined","BOOL_WIDTH","BITINT_MAXWIDTH",
++ "case","catch","char","char8_t","char16_t","char32_t","complex","class","co_await","compl",
++ "concept","const","const_cast","consteval","constexpr","constinit","continue","contract_assert",
++ "co_return","co_yield","CHAR_BIT","CHAR_WIDTH","CHAR_MIN","CHAR_MAX","__cpp_char8_t","__cpp_concepts",
++ "__cpp_consteval","__cpp_contracts","__cpp_decltype","__cpp_decltype_auto","__cpp_impl_coroutine","__cpp_modules","__cpp_unicode_characters",
++ "decltype","default","#define","defined","delete","do","double","dynamic_cast","DBL_HAS_SUBNORM","DBL_MANT_DIG",
++ "DBL_DECIMAL_DIG","DECIMAL_DIG","DBL_DIG","DBL_MIN_EXP","DBL_MIN_10_EXP","DBL_MAX_EXP","DBL_MAX_10_EXP","DBL_MAX","DBL_EPSILON","DBL_MIN","DBL_TRUE_MIN","DBL_SNAN",
++ "#elif","#elifdef","#elifndef","#else","else","#embed","#endif","enum","#error","explicit","export","extern",
++ "false","final","float","for","friend","FLT_ROUNDS","FLT_EVAL_METHOD","FLT_HAS_SUBNORM","FLT_RADIX","FLT_MANT_DIG","FLT_DECIMAL_DIG","FLT_DIG",
++ "FLT_MIN_EXP","FLT_MIN_10_EXP","FLT_MAX_EXP","FLT_MAX_10_EXP","FLT_MAX","FLT_EPSILON","FLT_MIN","FLT_TRUE_MIN","FLT_SNAN",
++ "goto",
++ "__has_cpp_attribute","__has_embed","__has_include",
++ "#if","if","#ifdef","#ifndef","import","#include","inline","INFINITY","imaginary","_Imaginary_I","if_empty","__if_empty__",
++ "int","int8_t","int16_t","int32_t","int64_t","int_fast8_t","int_fast16_t","int_fast32_t","int_fast64_t","int_least8_t","int_least16_t","int_least32_t","int_least64_t","intmax_t","intptr_t",
++ "INT8_WIDTH","INT16_WIDTH","INT32_WIDTH","INT64_WIDTH","INT_FAST8_WIDTH","INT_FAST16_WIDTH","INT_FAST32_WIDTH","INT_FAST64_WIDTH","INT_LEAST8_WIDTH","INT_LEAST16_WIDTH","INT_LEAST32_WIDTH","INT_LEAST64_WIDTH",
++ "INTMAX_WIDTH","INTPTR_WIDTH","INT8_MIN","INT16_MIN","INT32_MIN","INT64_MIN","INT_FAST8_MIN","INT_FAST16_MIN","INT_FAST32_MIN","INT_FAST64_MIN","INT_LEAST8_MIN","INT_LEAST16_MIN","INT_LEAST32_MIN","INT_LEAST64_MIN",
++ "INTMAX_MIN","INTPTR_MIN","INT8_MAX","INT16_MAX","INT32_MAX","INT64_MAX","INT_FAST8_MAX","INT_FAST16_MAX","INT_FAST32_MAX","INT_FAST64_MAX","INT_LEAST8_MAX","INT_LEAST16_MAX","INT_LEAST32_MAX","INT_LEAST64_MAX",
++ "INTMAX_MAX","INTPTR_MAX","INT_WIDTH","INT_MIN","INT_MAX",
++ "#line","__LINE__","long","limit","__limit__",
++ "LONG_WIDTH","LONG_MIN","LONG_MAX","LLONG_WIDTH","LLONG_MIN","LLONG_MAX","LDBL_HAS_SUBNORM","LDBL_MANT_DIG","LDBL_DECIMAL_DIG","LDBL_DIG","LDBL_MIN_EXP","LDBL_MIN_10_EXP","LDBL_MAX_EXP","LDBL_MAX_10_EXP","LDBL_MAX",
++ "LDBL_EPSILON","LDBL_MIN","LDBL_TRUE_MIN","LDBL_SNAN",
++ "module","mutable","MB_LEN_MAX",
++ "namespace","new","noexcept","not","not_eq","NULL","nullptr","noreturn","NAN",
++ "operator","or","or_eq","override","offsetof",
++ "posix","post","#pragma","_Pragma","pre","private","protected","public","ptrdiff_t","prefix","__prefix__","PTRDIFF_WIDTH","PTRDIFF_MIN","PTRDIFF_MAX",
++ "reflexpr","register","reinterpret_cast","requires","return",
++ "short","signed","sizeof","static","size_t","ssize_t","suffix","__suffix__","static_assert","static_cast","struct","switch","synchronized","std","SCHAR_WIDTH","SHRT_WIDTH","SCHAR_MIN","SCHAR_MAX","SHRT_MIN",
++ "SHRT_MAX","SIZE_WIDTH","SIZE_MIN","SIZE_MAX","SIG_ATOMIC_WIDTH","SIG_ATOMIC_MIN","SIG_ATOMIC_MAX",
++ "template","this","thread_local","throw","transaction_safe","transaction_safe_dynamic","true","try","typedef","typeid","typename",
++ "uint8_t","uint16_t","uint32_t","uint64_t","uint_fast8_t","uint_fast16_t","uint_fast32_t","uint_fast64_t","uint_least8_t","uint_least16_t","uint_least32_t","uint_least64_t","uintmax_t","uintptr_t",
++ "#undef","union","unsigned","using","UINT8_WIDTH","UINT16_WIDTH","UINT32_WIDTH","UINT64_WIDTH","UINT_FAST8_WIDTH","UINT_FAST16_WIDTH","UINT_FAST32_WIDTH","UINT_FAST64_WIDTH",
++ "UINT_LEAST8_WIDTH","UINT_LEAST16_WIDTH","UINT_LEAST32_WIDTH","UINT_LEAST64_WIDTH","UINTMAX_WIDTH","UINTPTR_WIDTH","UINT8_MAX","UINT16_MAX","UINT32_MAX","UINT64_MAX",
++ "UINT_FAST8_MAX","UINT_FAST16_MAX","UINT_FAST32_MAX","UINT_FAST64_MAX","UINT_LEAST8_MAX","UINT_LEAST16_MAX","UINT_LEAST32_MAX","UINT_LEAST64_MAX","UINTMAX_MAX","UINTPTR_MAX",
++ "INT8_C","INT16_C","INT32_C","INT64_C","INTMAX_C","UINT8_C","UINT16_C","UINT32_C","UINT64_C","UINTMAX_C","UCHAR_WIDTH","USHRT_WIDTH","UINT_WIDTH","ULONG_WIDTH","ULLONG_WIDTH",
++ "UCHAR_MAX","USHRT_MAX","UINT_MAX","ULONG_MAX","ULLONG_MAX",
++ "virtual","void","volatile",
++ "#warning","wchar_t","while","WCHAR_WIDTH","WCHAR_MIN","WCHAR_MAX","WINT_WIDTH","WINT_MIN","WINT_MAX",
++ "xor","xor_eq",
++ NULL
++};
++
++const uint8_t CPP_H_keywords_len[]=
++{
++  4,  2,  2,  2,  2,  2,  3,  3,  3,  3,  3,  3,  3,  3,  3,
++  7,  7,  3,  6,  3,  5,  7,  4,
++ 13, 13, 15, 20, 20,
++  6,  5,  4,  5, 29, 10, 15,
++  4,  5,  4,  7,  8,  8,  7,  5,  8,  5,
++  7,  5, 10,  9,  9,  9,  8, 15,
++  9,  8,  8, 10,  8,  8, 13, 14,
++ 15, 15, 14, 19, 20, 13, 24,
++  8,  7,  7,  7,  6,  2,  6, 12, 15, 12,
++ 15, 11,  7, 11, 14, 11, 14,  7, 11,  7, 12,  8,
++  5,  8,  9,  5,  4,  6,  6,  4,  6,  8,  6,  6,
++  5,  5,  5,  3,  6, 10, 15, 15,  9, 12, 15,  7,
++ 11, 14, 11, 14,  7, 11,  7, 12,  8,
++  4,
++ 19, 11, 13,
++  3,  2,  6,  7,  6,  8,  6,  8,  9, 12,  8, 12,
++  3,  6,  7,  7,  7, 11, 12, 12, 12, 12, 13, 13, 13,  8,  8,
++ 10, 11, 11, 11, 15, 16, 16, 16, 16, 17, 17, 17,
++ 12, 12,  8,  9,  9,  9, 13, 14, 14, 14, 14, 15, 15, 15,
++ 10, 10,  8,  9,  9,  9, 13, 14, 14, 14, 14, 15, 15, 15,
++ 10, 10,  9,  7,  7,
++  5,  8,  4,  5,  9,
++ 10,  8,  8, 11,  9,  9, 16, 13, 16,  8, 12, 15, 12, 15,  8,
++ 12,  8, 13,  9,
++  6,  7, 10,
++  9,  3,  8,  3,  6,  4,  7,  8,  3,
++  8,  2,  5,  8,  8,
++  5,  4,  7,  7,  3,  7,  9,  6,  9,  6, 10, 13, 11, 11,
++  8,  8, 16,  8,  6,
++  5,  6,  6,  6,  6,  7,  6, 10, 13, 11,  6,- 6, 12,  3, 11, 10,  9,  9,  8,
++  8, 10,  8,  8, 16, 14, 14,
++  8,  4, 12,  5, 16, 24,  4,  3,  7,  6,  8,
++  7,  8,  8,  8, 12, 13, 13, 13, 13, 14, 14, 14,  9,  9,
++  6,  5,  8,  5, 11, 12, 12, 12, 16, 17, 17, 17,
++ 17, 18, 18, 18, 13, 13,  9, 10, 10, 10,
++ 14, 15, 15, 15, 15, 16, 16, 16, 11, 11,
++  6,  7,  7,  7,  8,  7,  8,  8,  8,  9, 11, 11, 10, 11, 12,
++  9,  9,  8,  9, 10,
++  7,  4,  8,
++  8,  7,  5, 11,  9,  9, 10,  8,  8,
++  3,  6,
++};
++
++//1 H_KEYWORD_1
++//2 H_KEYWORD_2
++//3 H_KEYWORD_3
++
++const uint8_t CPP_H_keywords_syntax_color[]=
++{
++ 3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,
++ 3,  3,  3,  3,  3,  3,  3,  3,
++ 3,  3,  3,  3,  3,
++ 3,  3,  2,  3,  3,  3,  3,
++ 3,  3,  2,  2,  2,  2,  3,  3,  3,  3,
++ 3,  3,  3,  3,  3,  3,  3,  3,
++ 3,  3,  3,  3,  3,  3,  3,  3,
++ 3,  3,  3,  3,  3,  3,  3,
++ 3,  3,  1,  3,  3,  3,  2,  3,  3,  3,
++ 3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,
++ 1,  1,  1,  1,  3,  1,  1,  2,  1,  3,  3,  3,
++ 3,  3,  2,  3,  3,  3,  3,  3,  3,  3,  3,  3,
++ 3,  3,  3,  3,  3,  3,  3,  3,  3,
++ 3,
++ 3,  3,  3,
++ 1,  3,  1,  1,  3,  1,  3,  3,  3,  3,  3,  3,
++ 2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,
++ 3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,
++ 3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,
++ 3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,
++ 3,  3,  3,  3,  3,
++ 1,  3,  2,  3,  3,
++ 3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,
++ 3,  3,  3,  3,
++ 3,  3,  3,
++ 3,  3,  3,  3,  3,  2,  3,  3,  3,
++ 3,  3,  3,  3,  3,
++ 3,  3,  1,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,
++ 3,  3,  3,  3,  3,
++ 2,  2,  3,  3,  2,  2,  3,  3,  3,  3,  2,  3,  3,  3,  3,  3,  3,  3,  3,
++ 3,  3,  3,  3,  3,  3,  3,
++ 3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,
++ 2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,
++ 1,  3,  2,  3,  3,  3,  3,  3,  3,  3,  3,  3,
++ 3,  3,  3,  3,  3,  3,  3,  3,  3,  3,
++ 3,  3,  3,  3,  3,  3,  3,  3,  3,  3,
++ 3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,
++ 3,  3,  3,  3,  3,
++ 3,  2,  3,
++ 1,  3,  3,  3,  3,  3,  3,  3,  3,
++ 3,  3,
++};
++
+ /*** data ***/
+ typedef struct
+ {
+@@ -507,7 +649,8 @@
+ syntax H_DB[]=
+ {
+  //use NULL for comments if you do not have them
+- {"C",C_H_extensions,C_H_keywords,C_H_keywords_len,C_H_keywords_syntax_color,"//","/*","*/"}
++ {"C",C_H_extensions,C_H_keywords,C_H_keywords_len,C_H_keywords_syntax_color,"//","/*","*/"},
++ {"C++",CPP_H_extensions,CPP_H_keywords,CPP_H_keywords_len,CPP_H_keywords_syntax_color,"//","/*","*/"}
+ };
+ 
+ #define H_DB_ENTRIES (uint8_t)((sizeof(H_DB)/sizeof(H_DB[0])))

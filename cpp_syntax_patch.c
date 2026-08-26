@@ -89,7 +89,7 @@ const uint8_t CPP_H_keywords_len[]=
   7,  4,  8,
   8,  7,  5, 11,  9,  9, 10,  8,  8,
   3,  6,
-}
+};
 
 //1 H_KEYWORD_1
 //2 H_KEYWORD_2
@@ -138,6 +138,6 @@ const uint8_t CPP_H_keywords_syntax_color[]=
  3,  2,  3,
  1,  3,  3,  3,  3,  3,  3,  3,  3,
  3,  3,
-}
+};
 
 {"C++",CPP_H_extensions,CPP_H_keywords,CPP_H_keywords_len,CPP_H_keywords_syntax_color,"//","/*","*/"}

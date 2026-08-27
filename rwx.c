@@ -4,7 +4,7 @@
 
 //Tabs must be power of 2 (2,4 or 8)
 #define TAB_STOP      2
-#define QUIT_TIMES    1
+#define QUIT_TIMES    2
 #define SIZE_LIMIT 1024
 
 #define FG_BLACK   30
@@ -668,7 +668,7 @@ void update_known_mtime();
 void check_file_modified_externally();
 int8_t file_is_binary(const char* path);
 void open_file(char* file_name);
-char* rows_to_string(uint32_t* buffer_placement_len);
+char* rows_to_string(uint32_t* buffer_replacement_len);
 void save_file();
 
 //find
@@ -1585,7 +1585,7 @@ uint16_t read_key()
   }
 
   ssize_t n_read=0;
-  char c=0;
+  unsigned char c=0;
 
   while((n_read=read(STDIN_FILENO,&c,1)) != 1)
   {
@@ -4923,7 +4923,7 @@ void open_file(char* file_name)
  compact_row_arenas();
 }
 
-char* rows_to_string(uint32_t* buffer_placement_len)
+char* rows_to_string(uint32_t* buffer_replacement_len)
 {
  uint32_t total_len=0;
  int32_t i=0;
@@ -4933,7 +4933,7 @@ char* rows_to_string(uint32_t* buffer_placement_len)
   total_len+=E.row[i].size+1;
  }
 
- *buffer_placement_len=total_len;
+ *buffer_replacement_len=total_len;
 
  char* buffer=malloc(total_len > 0 ? total_len : 1);
 
@@ -5315,6 +5315,18 @@ void find()
 
   switch(key)
   {
+   case RESIZE_KEY:
+   {
+    window_resized=0;
+
+    if(get_window_size(&E.term_rows,&E.screen_cols) == -1)
+    {
+     die("get_window_size [find]");
+    }
+    ++E.wrap_generation;
+   }
+   break;
+
    case '\x1b':
    {
     running=0;
@@ -5646,6 +5658,18 @@ void search_and_replace()
 
   switch(key)
   {
+   case RESIZE_KEY:
+   {
+    window_resized=0;
+
+    if(get_window_size(&E.term_rows,&E.screen_cols) == -1)
+    {
+     die("get_window_size [search_and_replace]");
+    }
+    ++E.wrap_generation;
+   }
+   break;
+
    case '\x1b':
    {
     running=0;
@@ -5756,7 +5780,7 @@ char* prompt(uint8_t color,char* prompt,void (*callback)(char*,uint16_t))
   die("malloc [prompt]");
  }
 
- uint16_t buffereplacement_len=0;
+ uint16_t buffer_replacement_len=0;
  buffer[0]='\0';
 
  set_status_message(color,prompt,buffer);
@@ -5779,11 +5803,54 @@ char* prompt(uint8_t color,char* prompt,void (*callback)(char*,uint16_t))
    continue;
   }
 
-  if(c == DEL_KEY || c == BACKSPACE)
+  if(c == BRACKETED_PASTE)
   {
-   if(buffereplacement_len != 0)
+   if(paste_stream_buffer != NULL && paste_stream_len > 0)
    {
-    buffer[--buffereplacement_len]='\0';
+    uint32_t p_i=0;
+
+    for(p_i=0;p_i < paste_stream_len;++p_i)
+    {
+     unsigned char p_c=(unsigned char)paste_stream_buffer[p_i];
+
+     if(p_c < 32 || p_c == 127)
+     {
+      continue;
+     }
+
+     if(buffer_replacement_len >= buffer_size-1)
+     {
+      buffer_size*=2;
+      char* temp=realloc(buffer,buffer_size);
+
+      if(temp == NULL)
+      {
+       die("realloc [prompt]");
+      }
+      buffer=temp;
+     }
+
+     buffer[buffer_replacement_len++]=(char)p_c;
+     buffer[buffer_replacement_len]='\0';
+    }
+   }
+
+   free(paste_stream_buffer);
+   paste_stream_buffer=NULL;
+   paste_stream_len=0;
+  }
+  else if(c == DEL_KEY || c == BACKSPACE)
+  {
+   if(buffer_replacement_len != 0)
+   {
+    --buffer_replacement_len;
+
+    while(buffer_replacement_len > 0 && ((unsigned char)buffer[buffer_replacement_len] & 0xC0) == 0x80)
+    {
+     --buffer_replacement_len;
+    }
+
+    buffer[buffer_replacement_len]='\0';
    }
   }
   else if(c == '\x1b')
@@ -5800,7 +5867,7 @@ char* prompt(uint8_t color,char* prompt,void (*callback)(char*,uint16_t))
   }
   else if(c == '\r')
   {
-   if(buffereplacement_len != 0)
+   if(buffer_replacement_len != 0)
    {
     set_status_message(DEFAULT_MSG_COLOR,"");
 
@@ -5812,19 +5879,23 @@ char* prompt(uint8_t color,char* prompt,void (*callback)(char*,uint16_t))
     return buffer;
    }
   }
-  else if(!iscntrl(c) && c < ASCII_CHAR_LIMIT)
+  else if(c >= 32 && c < 256)
   {
-   if(buffereplacement_len < buffer_size-1)
+   if(buffer_replacement_len >= buffer_size-1)
    {
-    buffer[buffereplacement_len++]=c;
-    buffer[buffereplacement_len]='\0';
-   }
-   else
-   {
-    set_status_message(ERROR_MSG_COLOR,"Filename size limit reached (255 chars)");
-   }
-  }
+    buffer_size*=2;
+    char* temp=realloc(buffer,buffer_size);
 
+    if(temp == NULL)
+    {
+     die("realloc [prompt]");
+    }
+    buffer=temp;
+   }
+
+   buffer[buffer_replacement_len++]=(char)c;
+   buffer[buffer_replacement_len]='\0';
+  }
   if(callback)
   {
    callback(buffer,c);

@@ -672,6 +672,8 @@ char* rows_to_string(uint32_t* buffer_replacement_len);
 void save_file();
 
 //find
+int32_t row_c_x_to_render_byte_offset(e_row* row,int32_t c_x);
+static int32_t render_byte_offset_to_r_x(e_row* row,int32_t byte_offset);
 static int32_t find_last_in_row_before(e_row* row,char* query,int32_t before_col);
 static int32_t find_next_match(int32_t start_row,int32_t start_col,char* query,int8_t direction,int32_t* out_row);
 static void count_matches(char* query,int32_t cur_row,int32_t cur_col,int32_t* rank,int32_t* total);
@@ -5003,6 +5005,111 @@ void save_file()
 }
 
 /*** find ***/
+int32_t row_c_x_to_render_byte_offset(e_row* row,int32_t c_x)
+{
+ int32_t index=0;
+ int32_t i=0;
+
+ for(i=0;i < c_x && i < row->size;++i)
+ {
+  unsigned char c=(unsigned char)row->characters[i];
+  uint8_t ctrl_type=get_render_control_type(c);
+
+  if(c == '\t')
+  {
+   index+=TAB_STOP-(index & (TAB_STOP-1));
+  }
+  else if(ctrl_type == 1)
+  {
+   index+=6;
+  }
+  else if(ctrl_type == 2)
+  {
+   index+=4;
+  }
+  else if(c > 127)
+  {
+   uint8_t seq_len=E.utf8_output ? utf8_seq_len_valid(row,i) : 0;
+
+   if(seq_len > 1)
+   {
+    uint32_t c_p=utf8_decode_buf(row->characters,i,row->size,seq_len);
+
+    if(c_p >= 0x80 && c_p <= 0x9F)
+    {
+     seq_len=0;
+    }
+   }
+
+   if(seq_len > 1)
+   {
+    index+=seq_len;
+    i+=seq_len-1;
+   }
+   else
+   {
+    index+=4;
+   }
+  }
+  else
+  {
+   ++index;
+  }
+ }
+ return index;
+}
+
+static int32_t render_byte_offset_to_r_x(e_row* row,int32_t byte_offset)
+{
+ int32_t r_x=0;
+ int32_t i=0;
+
+ while(i < byte_offset && i < row->r_size)
+ {
+  unsigned char c=(unsigned char)row->render[i];
+
+  if(c < 0x80)
+  {
+   ++r_x;
+   ++i;
+  }
+  else
+  {
+   uint8_t seq_len=1;
+
+   if((c & 0xE0) == 0xC0)
+   {
+    seq_len=2;
+   }
+   else if((c & 0xF0) == 0xE0)
+   {
+    seq_len=3;
+   }
+   else if((c & 0xF8) == 0xF0)
+   {
+    seq_len=4;
+   }
+
+   if(i+seq_len > row->r_size)
+   {
+    seq_len=1;
+   }
+
+   if(seq_len > 1)
+   {
+    uint32_t c_p=utf8_decode_buf(row->render,i,row->r_size,seq_len);
+    r_x+=code_point_is_wide(c_p) ? 2 : 1;
+   }
+   else
+   {
+    ++r_x;
+   }
+   i+=seq_len;
+  }
+ }
+ return r_x;
+}
+
 static int32_t find_last_in_row_before(e_row* row,char* query,int32_t before_col)
 {
  int32_t result=-1;
@@ -5224,7 +5331,7 @@ void find_callback(char* query,uint16_t key)
  e_row* row=&E.row[found_row];
 
  E.c_y=found_row;
- E.c_x=row_r_x_to_c_x(row,found_col);
+ E.c_x=row_r_x_to_c_x(row,render_byte_offset_to_r_x(row,found_col));
  E.row_off=E.num_rows;
 
  saved_highlight_line=found_row;
@@ -5297,7 +5404,7 @@ void find()
   }
  }
  int32_t match_row=E.c_y;
- int32_t match_col=row_c_x_to_r_x(&E.row[E.c_y],E.c_x);
+ int32_t match_col=row_c_x_to_render_byte_offset(&E.row[E.c_y],E.c_x);
 
  uint8_t running=1;
 
@@ -5342,7 +5449,7 @@ void find()
     {
      match_row=found_row;
      match_col=found_col;
-     E.c_x=row_r_x_to_c_x(&E.row[found_row],found_col);
+     E.c_x=row_r_x_to_c_x(&E.row[found_row],render_byte_offset_to_r_x(&E.row[found_row],found_col));
      E.c_y=found_row;
      E.row_off=E.num_rows;
     }
@@ -5358,7 +5465,7 @@ void find()
     {
      match_row=found_row;
      match_col=found_col;
-     E.c_x=row_r_x_to_c_x(&E.row[found_row],found_col);
+     E.c_x=row_r_x_to_c_x(&E.row[found_row],render_byte_offset_to_r_x(&E.row[found_row],found_col));
      E.c_y=found_row;
      E.row_off=E.num_rows;
     }
@@ -5620,7 +5727,7 @@ void search_and_replace()
  }
 
  E.c_y=match_row;
- E.c_x=row_r_x_to_c_x(&E.row[match_row],match_col);
+ E.c_x=row_r_x_to_c_x(&E.row[match_row],render_byte_offset_to_r_x(&E.row[match_row],match_col));
  E.row_off=E.num_rows;
 
  char replace_format[256];
@@ -5685,7 +5792,7 @@ void search_and_replace()
     {
      match_row=found_row;
      match_col=found_col;
-     E.c_x=row_r_x_to_c_x(&E.row[found_row],found_col);
+     E.c_x=row_r_x_to_c_x(&E.row[found_row],render_byte_offset_to_r_x(&E.row[found_row],found_col));
      E.c_y=found_row;
      E.row_off=E.num_rows;
     }
@@ -5701,7 +5808,7 @@ void search_and_replace()
     {
      match_row=found_row;
      match_col=found_col;
-     E.c_x=row_r_x_to_c_x(&E.row[found_row],found_col);
+     E.c_x=row_r_x_to_c_x(&E.row[found_row],render_byte_offset_to_r_x(&E.row[found_row],found_col));
      E.c_y=found_row;
      E.row_off=E.num_rows;
     }
@@ -5729,7 +5836,7 @@ void search_and_replace()
     {
      match_row=found_row;
      match_col=found_col;
-     E.c_x=row_r_x_to_c_x(&E.row[found_row],found_col);
+     E.c_x=row_r_x_to_c_x(&E.row[found_row],render_byte_offset_to_r_x(&E.row[found_row],found_col));
      E.c_y=found_row;
      E.row_off=E.num_rows;
     }
@@ -5756,7 +5863,7 @@ void search_and_replace()
     }
     else
     {
-     E.c_x=row_r_x_to_c_x(&E.row[match_row],match_col);
+     E.c_x=row_r_x_to_c_x(&E.row[match_row],render_byte_offset_to_r_x(&E.row[match_row],match_col));
      E.c_y=match_row;
      E.row_off=E.num_rows;
     }

@@ -1,4 +1,4 @@
-Guide:
+Uputstvo:
 # Instalacija
 # Posix (Linux, MacOS, FreeBSD, OpenBSD, NetBSD):
 #1. Kloniranje repozitorijuma

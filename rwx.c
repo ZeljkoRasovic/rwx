@@ -6786,24 +6786,60 @@ void process_keypress()
 
    if(c == DEL_KEY)
    {
-    move_cursor(ARROW_RIGHT);
+    if(E.c_y < E.num_rows && E.c_x == E.row[E.c_y].size)
+    {
+     if(E.c_y+1 < E.num_rows)
+     {
+      e_row* cur=&E.row[E.c_y];
+      e_row* next=&E.row[E.c_y+1];
+      action.type=USER_ACTION_JOIN_LINES;
+      action.c_x=cur->size;
+      action.c_y=E.c_y+1;
+      action.join_col=cur->size;
+      action.row_len=next->size;
+      action.row_text=next->size > 0 ? malloc(next->size) : NULL;
+
+      if(next->size > 0 && action.row_text == NULL)
+      {
+       set_status_message(ERROR_MSG_COLOR,"Low memory: join aborted");
+       return;
+      }
+
+      if(action.row_text != NULL)
+      {
+       memcpy(action.row_text,next->characters,next->size);
+      }
+
+      undo_push(&action);
+      row_append_string(cur,next->characters,next->size);
+      del_row(E.c_y+1);
+      E.c_x=cur->size;
+      return;
+     }
+     else
+     {
+      return;
+     }
+    }
+    else
+    {
+     move_cursor(ARROW_RIGHT);
+    }
    }
 
    if(E.c_y < E.num_rows && !(E.c_x == 0 && E.c_y == 0))
    {
-    action.row_text=NULL;
-
     if(E.c_x > 0)
     {
      e_row* row=&E.row[E.c_y];
      int32_t start_c_x=snap_to_utf8_start(row,E.c_x-1);
-
      action.type=USER_ACTION_DEL_CHAR;
      action.c_x=E.c_x;
      action.c_y=E.c_y;
      action.c_len=(uint8_t)(E.c_x-start_c_x);
      memcpy(action.c,&row->characters[start_c_x],action.c_len);
      undo_push(&action);
+     del_char();
     }
     else
     {
@@ -6814,17 +6850,17 @@ void process_keypress()
      action.row_len=E.row[E.c_y].size;
      action.row_text=action.row_len > 0 ? malloc(action.row_len) : NULL;
 
-     if(action.row_len > 0)
+     if(action.row_len > 0 && action.row_text == NULL)
      {
-      action.row_text=malloc(action.row_len);
+      set_status_message(ERROR_MSG_COLOR,"Low memory: join aborted");
+      return;
+     }
 
-      if(action.row_text == NULL)
-      {
-       set_status_message(ERROR_MSG_COLOR,"Low memory: join aborted");
-       return;
-      }
+     if(action.row_text != NULL)
+     {
       memcpy(action.row_text,E.row[E.c_y].characters,action.row_len);
      }
+
      undo_push(&action);
      del_char();
     }

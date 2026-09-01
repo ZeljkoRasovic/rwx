@@ -834,6 +834,7 @@ int8_t write_all(int32_t f_d,const char* buf,uint32_t len)
 
 void die(char* s)
 {
+ write_all(STDOUT_FILENO,"\x1b[?2004l",8);
  write_all(STDOUT_FILENO,"\x1b[?1006l",8);
  write_all(STDOUT_FILENO,"\x1b[?1002l",8);
  write_all(STDOUT_FILENO,"\x1b[2J",4);
@@ -1186,7 +1187,7 @@ void enable_raw_mode()
  #ifdef _WIN32
   HANDLE h_in=GetStdHandle(STD_INPUT_HANDLE);
   HANDLE h_out=GetStdHandle(STD_OUTPUT_HANDLE);
-    
+
   if(h_in == INVALID_HANDLE_VALUE || h_out == INVALID_HANDLE_VALUE)
   {
    die("GetStdHandle [enable_raw_mode]");
@@ -1551,9 +1552,38 @@ uint16_t read_key()
     break;
    }
 
-   if(w_c >= 0xD800 && w_c <= 0xDFFF)
+   static WCHAR pending_surrogate=0;
+
+   if(w_c >= 0xD800 && w_c <= 0xDBFF)
    {
+    pending_surrogate=w_c;
     continue;
+   }
+
+   if(w_c >= 0xDC00 && w_c <= 0xDFFF)
+   {
+
+    if(pending_surrogate == 0)
+    {
+     continue;
+    }
+
+    WCHAR utf16[8]={pending_surrogate,w_c};
+    char utf8[8];
+    int len=WideCharToMultiByte(CP_UTF8,0,utf16,2,utf8,sizeof(utf8),NULL,NULL);
+
+    if(len > 0)
+    {
+     memcpy(pending_utf8,utf8,len);
+     pending_utf8_len=len;
+    }
+
+    pending_surrogate=0;
+    char first_byte=pending_utf8[0];
+
+    --pending_utf8_len;
+    memmove(pending_utf8, pending_utf8+1, pending_utf8_len);
+    return (uint16_t)(unsigned char)first_byte;
    }
 
    if(w_c > 0 && w_c < 0x80)
@@ -1584,7 +1614,23 @@ uint16_t read_key()
    return (uint16_t)(unsigned char)first_byte;
   }
  #else
-  if(window_resized)
+  static uint16_t pushback_buffer[8];
+  static uint16_t pushback_len=0;
+  static uint16_t pushback_pos=0;
+
+  if(pushback_pos < pushback_len)
+  {
+   uint16_t pushback_c=pushback_buffer[pushback_pos++];
+
+   if(pushback_pos >= pushback_len)
+   {
+    pushback_len=0;
+    pushback_pos=0;
+   }
+   return (uint16_t)pushback_c;
+  }
+
+  if (window_resized)
   {
    return RESIZE_KEY;
   }
@@ -1613,6 +1659,7 @@ uint16_t read_key()
     return RESIZE_KEY;
    }
   }
+
   if(c == '\x1b')
   {
    char seq[8];
@@ -1621,7 +1668,6 @@ uint16_t read_key()
    {
     return '\x1b';
    }
-  
    if(read(STDIN_FILENO,&seq[1],1) != 1)
    {
     return '\x1b';
@@ -1631,8 +1677,8 @@ uint16_t read_key()
    {
     if(seq[1] == '<')
     {
-     char m_buf[16];
      uint8_t m_i=0;
+     char m_buf[16];
      char m_c=0;
      char terminator=0;
 
@@ -1657,9 +1703,8 @@ uint16_t read_key()
      }
 
      m_buf[m_i]='\0';
-
-     char* p=m_buf;
-     char* end_p=NULL;
+     char *p=m_buf;
+     char *end_p=NULL;
      long button=strtol(p,&end_p,10);
 
      if(end_p == p)
@@ -1694,7 +1739,7 @@ uint16_t read_key()
       g_mouse_y=(int32_t)(m_row-1);
      }
 
-     long base=button & ~(4L|8L|16L);
+     long base=button & ~(4L | 8L | 16L);
 
      if(button == 64)
      {
@@ -1741,81 +1786,131 @@ uint16_t read_key()
      {
       return MOUSE_RIGHT_PRESS;
      }
-
      return read_key();
     }
     else if(seq[1] == '2')
     {
-     char tail[8];
+     uint16_t next_char;
 
-     if(read(STDIN_FILENO,&tail[0],1)!=1){return '\x1b';}
+     if(pushback_pos < pushback_len)
+     {
+      next_char=pushback_buffer[pushback_pos++];
+     }
+     else
+     {
+      if(read(STDIN_FILENO,&next_char,1) != 1)
+      {
+       return '\x1b';
+      }
+     }
 
-     if(tail[0] == '~')
+     if(next_char == '~')
      {
       return INSERT_KEY;
      }
-
-     if(read(STDIN_FILENO,&tail[1],1)!=1){return '\x1b';}
-     if(read(STDIN_FILENO,&tail[2],1)!=1){return '\x1b';}
-
-     if(tail[0]=='0' && tail[1]=='0' && tail[2]=='~')
+     else if(next_char == '0')
      {
-      free(paste_stream_buffer);
-      paste_stream_buffer=NULL;
-      paste_stream_len=0;
+      uint16_t c_1=0;
+      uint16_t c_2=0;
 
-      uint32_t cap=1024;
-      paste_stream_buffer=malloc(cap);
-
-      if(paste_stream_buffer == NULL)
+      if(pushback_pos < pushback_len)
       {
-       die("malloc paste_stream_buffer [read_key]");
+       c_1=pushback_buffer[pushback_pos++];
+      }
+      else
+      {
+       if(read(STDIN_FILENO,&c_1,1) != 1)
+       {
+        return '\x1b';
+       }
       }
 
-      while(1)
+      if(pushback_pos < pushback_len)
       {
-       char p_c=0;
-       ssize_t r=0;
-
-       while((r=read(STDIN_FILENO,&p_c,1)) != 1)
+       c_2=pushback_buffer[pushback_pos++];
+      }
+      else
+      {
+       if(read(STDIN_FILENO,&c_2,1) != 1)
        {
-        if(r == -1 && errno != EAGAIN && errno != EINTR)
-        {
-         die("read [read_key]");
-        }
-       }
-
-       if(paste_stream_len+1 >= cap)
-       {
-        cap*=2;
-        char* temp=realloc(paste_stream_buffer,cap);
-
-        if(temp == NULL)
-        {
-         die("realloc paste_stream_buffer [read_key]");
-        }
-        paste_stream_buffer=temp;
-       }
-
-       paste_stream_buffer[paste_stream_len++]=p_c;
-
-       if(paste_stream_len >= 6)
-       {
-        static const char end_marker[]="\x1b[201~";
-
-        if(memcmp(paste_stream_buffer+paste_stream_len-6,end_marker,6) == 0)
-        {
-         paste_stream_len-=6;
-         break;
-        }
+        return '\x1b';
        }
       }
-      return BRACKETED_PASTE;
+
+      if (c_1 == '0' && c_2 == '~')
+      {
+       free(paste_stream_buffer);
+       paste_stream_buffer=NULL;
+       paste_stream_len=0;
+
+       uint32_t cap=1024;
+       paste_stream_buffer=malloc(cap);
+
+       if(paste_stream_buffer == NULL)
+       {
+        die("malloc paste_stream_buffer [read_key]");
+       }
+
+       while(1)
+       {
+        char p_c=0;
+        ssize_t r=0;
+
+        while((r=read(STDIN_FILENO,&p_c,1)) != 1)
+        {
+         if(r == -1 && errno != EAGAIN && errno != EINTR)
+         {
+          die("read [read_key]");
+         }
+        }
+
+        if(paste_stream_len+1 >= cap)
+        {
+         cap*=2;
+         char *temp=realloc(paste_stream_buffer,cap);
+
+         if(temp == NULL)
+         {
+          die("realloc paste_stream_buffer [read_key]");
+         }
+         paste_stream_buffer = temp;
+        }
+        paste_stream_buffer[paste_stream_len++]=p_c;
+
+        if(paste_stream_len >= 6)
+        {
+         static const char end_marker[]="\x1b[201~";
+
+         if(memcmp(paste_stream_buffer+paste_stream_len-6,end_marker,6) == 0)
+         {
+          paste_stream_len-=6;
+          break;
+         }
+        }
+       }
+       return BRACKETED_PASTE;
+      }
+      else
+      {
+       pushback_len=0;
+       pushback_pos=0;
+       pushback_buffer[pushback_len++]=next_char;
+       pushback_buffer[pushback_len++]=c_1;
+       pushback_buffer[pushback_len++]=c_2;
+       return '\x1b';
+      }
+     }
+     else
+     {
+      pushback_len=0;
+      pushback_pos=0;
+      pushback_buffer[pushback_len++] = next_char;
+      return '\x1b';
      }
     }
-    else if(seq[1]>='0' && seq[1]<='9')
+    else if(seq[1] >= '0' && seq[1] <= '9')
     {
-     if(read(STDIN_FILENO,&seq[2],1) != 1)
+     if(read(STDIN_FILENO, &seq[2], 1) != 1)
      {
       return '\x1b';
      }
@@ -1824,7 +1919,7 @@ uint16_t read_key()
      {
       switch(seq[1])
       {
-       case '1':
+       case'1':
        {
         return HOME_KEY;
        }
@@ -1909,6 +2004,7 @@ uint16_t read_key()
       break;
      }
     }
+    return '\x1b';
    }
    else if(seq[0] == 'O')
    {
@@ -1926,6 +2022,7 @@ uint16_t read_key()
      }
      break;
     }
+    return '\x1b';
    }
    return '\x1b';
   }
@@ -2047,11 +2144,6 @@ void update_syntax(e_row* row)
   }
   else
   {
-   if(row->highlight != NULL)
-   {
-    highlight_arena_wasted+=(uint64_t)row->r_size;
-   }
-
    row->highlight=arena_push(highlight_arena,(uint64_t)row->r_size,0);
    memset(row->highlight,H_NORMAL,row->r_size);
   }
@@ -2639,6 +2731,11 @@ void update_row(e_row* row)
   render_arena_wasted+=(uint64_t)row->r_size+1;
  }
 
+ if(row->highlight != NULL)
+ {
+  highlight_arena_wasted+=(uint64_t)row->r_size;
+ }
+
  uint64_t max_render_size=(uint64_t)row->size*ROW_RENDER_MAX_EXPANSION+1;
 
  row->render=arena_push(render_arena,max_render_size,0);
@@ -3014,6 +3111,7 @@ void insert_utf8_char(char* bytes, int len)
  memcpy(action.c,bytes,len);
  action.row_text=NULL;
  undo_push(&action);
+ E.saved_r_x=-1;
 
  for(int i=0;i < len;++i)
  {
@@ -3033,6 +3131,7 @@ void insert_new_line()
  if(E.c_x == 0)
  {
   insert_row(E.c_y,"",0);
+  E.c_x=0;
  }
  else
  {
@@ -3041,9 +3140,9 @@ void insert_new_line()
   row=&E.row[E.c_y];
   row_truncate(row,E.c_x);
   update_row(row);
+  ++E.c_y;
+  E.c_x=0;
  }
- ++E.c_y;
- E.c_x=0;
 }
 
 void insert_text_range(char* text,uint32_t len)
@@ -3059,17 +3158,13 @@ void insert_text_range(char* text,uint32_t len)
  }
 
  uint32_t i=0;
- uint32_t newline_count=0;
-
- for(i=0;i < len;++i)
- {
-  if(text[i] == '\n')
-  {
-   ++newline_count;
-  }
- }
- 
  int32_t original_c_x=E.c_x;
+
+ if(original_c_x < 0 || original_c_x > E.row[E.c_y].size)
+ {
+  original_c_x = E.row[E.c_y].size;
+ }
+
  int32_t tail_len=E.row[E.c_y].size-original_c_x;
  char* tail_copy=NULL;
 
@@ -3177,6 +3272,11 @@ void delete_char_range(int32_t x_1,int32_t y_1,int32_t x_2,int32_t y_2)
  }
  else
  {
+  if(x_2 < 0 || x_2 > E.row[y_2].size)
+  {
+   x_2=E.row[y_2].size;
+  }
+
   int32_t end_tail_len=E.row[y_2].size-x_2;
   char* end_tail_copy=NULL;
 
@@ -3309,12 +3409,11 @@ void undo()
   case USER_ACTION_JOIN_LINES:
   {
    row_truncate(&E.row[action->c_y-1],action->join_col);
-
    update_row(&E.row[action->c_y-1]);
    insert_row(action->c_y,action->row_text != NULL ? action->row_text : "",action->row_len);
 
-   E.c_x=0;
-   E.c_y=action->c_y;
+   E.c_x=action->join_col;
+   E.c_y=action->c_y-1;
   }
   break;
 
@@ -3328,15 +3427,19 @@ void undo()
    }
 
    E.c_x=0;
+   int32_t new_c_y=action->c_y;
 
-   if(E.c_y >= E.num_rows && E.num_rows > 0)
+   if(new_c_y >= E.num_rows)
    {
-    E.c_y=E.num_rows-1;
+    new_c_y=E.num_rows-1;
    }
-   else
+
+   if(new_c_y < 0)
    {
-    E.c_y=action->c_y > 0 ? action->c_y-1 : 0;
+    new_c_y=0;
    }
+
+   E.c_y=new_c_y;
   }
   break;
 
@@ -3441,15 +3544,41 @@ void redo()
   {
    E.c_x=action->c_x;
    E.c_y=action->c_y;
-   insert_new_line();
+
+   if(E.c_y == E.num_rows)
+   {
+    insert_row(E.num_rows,"",0);
+    E.c_x=0;
+   }
+   else if(E.c_x == 0)
+   {
+    insert_row(E.c_y,"",0);
+    E.c_x=0;
+   }
+   else
+   {
+    e_row* row=&E.row[E.c_y];
+    insert_row(E.c_y+1,&row->characters[E.c_x],row->size-E.c_x);
+    row=&E.row[E.c_y];
+    row_truncate(row,E.c_x);
+    update_row(row);
+    ++E.c_y;
+    E.c_x=0;
+   }
   }
   break;
 
   case USER_ACTION_JOIN_LINES:
   {
-   E.c_x=0;
-   E.c_y=action->c_y;
-   del_char();
+   if(action->c_y > 0)
+   {
+    e_row* prev=&E.row[action->c_y-1];
+    e_row* cur=&E.row[action->c_y];
+    row_append_string(prev,cur->characters,cur->size);
+    del_row(action->c_y);
+    E.c_x=action->join_col;
+    E.c_y=action->c_y-1;
+   }
   }
   break;
 
@@ -3548,7 +3677,16 @@ void get_selection_bounds(int32_t* x_1,int32_t* y_1,int32_t* x_2,int32_t* y_2)
 
  if(r_x < r_row_size)
  {
-  r_x+=get_utf8_char_placement_length(&E.row[r_y],r_x);
+  int32_t advance=get_utf8_char_placement_length(&E.row[r_y],r_x);
+
+  if(r_x+advance <= r_row_size)
+  {
+   r_x+=advance;
+  }
+  else
+  {
+   r_x=r_row_size;
+  }
  }
  else
  {
@@ -3825,7 +3963,7 @@ void delete_selection()
 
   if(row->size > 0 && action.row_text == NULL)
   {
-   set_status_message(ERROR_MSG_COLOR,"Low memory: row deleted, not added to undo history");
+   set_status_message(ERROR_MSG_COLOR,"Low memory: can not allocate undo buffer, row delete aborted");
    return;
   }
 
@@ -4029,25 +4167,25 @@ void paste_clipboard()
 
  actions action;
  memset(&action,0,sizeof(action));
-
  action.type=USER_ACTION_RANGE_INSERT;
  action.c_x=start_x;
  action.c_y=start_y;
- action.c_x_end=E.c_x;
- action.c_y_end=E.c_y;
  action.row_len=clipboard_len;
  action.row_text=malloc(clipboard_len);
 
- if(action.row_text != NULL)
+ if(action.row_text == NULL)
  {
-  memcpy(action.row_text,clipboard_buffer,clipboard_len);
-  action.row_len=clipboard_len;
-  undo_push(&action);
+  set_status_message(ERROR_MSG_COLOR,"Low memory: can not allocate undo buffer, paste aborted");
+  delete_char_range(start_x,start_y,E.c_x,E.c_y);
+  E.c_x=start_x;
+  E.c_y=start_y;
+  return;
  }
- else
- {
-  set_status_message(ERROR_MSG_COLOR,"Low memory: paste not added to undo history");
- }
+ memcpy(action.row_text,clipboard_buffer,clipboard_len);
+ action.row_len=clipboard_len;
+ action.c_x_end=E.c_x;
+ action.c_y_end=E.c_y;
+ undo_push(&action);
 }
 
 /*** file browser ***/
@@ -4627,12 +4765,21 @@ char* browse_for_file(const char* start_path)
 
     free(clipboard_buffer);
     clipboard_buffer=strdup(copy_line);
-    clipboard_len=clipboard_buffer ? (uint32_t)strlen(clipboard_buffer) : 0;
-    clipboard_row_mode=0;
-    osc52_copy(clipboard_buffer,clipboard_len);
-    int32_t max_copy_len=(int32_t)sizeof(status_msg)-10;
-    snprintf(status_msg,sizeof(status_msg),"Copied '%.*s'",max_copy_len,copy_line);
-    status_is_notice=1;
+
+    if(clipboard_buffer == NULL)
+    {
+     snprintf(status_msg,sizeof(status_msg),"Memory allocation failed while copying");
+     status_is_notice=0;
+    }
+    else
+    {
+     clipboard_len=(uint32_t)strlen(clipboard_buffer);
+     clipboard_row_mode=0;
+     osc52_copy(clipboard_buffer,clipboard_len);
+     int32_t max_copy_len=(int32_t)sizeof(status_msg)-10;
+     snprintf(status_msg,sizeof(status_msg),"Copied '%.*s'",max_copy_len,copy_line);
+     status_is_notice=1;
+    }
    }
   }
 
@@ -4674,6 +4821,12 @@ char* browse_for_file(const char* start_path)
       continue;
      }
      result=strdup(full_path);
+     if(result == NULL)
+     {
+      snprintf(status_msg,sizeof(status_msg),"Memory allocation failed");
+      status_is_notice=0;
+      continue;
+     }
      break;
     }
    }
@@ -4791,6 +4944,10 @@ int8_t file_is_binary(const char* path)
 
  if(!f_p)
  {
+  if(errno == ENOENT)
+  {
+   return 0;
+  }
   return -1;
  }
 
@@ -4839,15 +4996,14 @@ void open_file(char* file_name)
   die("file_is_binary can not open the file [open_file]");
  }
 
- free(E.file_name);
- E.file_name=strdup(file_name);
-
  FILE* f_p=fopen(file_name,"rb");
 
  if(!f_p)
  {
   if(errno == ENOENT)
   {
+   reset_editor_for_new_file();
+   E.file_name=strdup(file_name);
    select_syntax_highlight();
    E.dirty=0;
    E.saved_undo_top=-1;
@@ -4857,6 +5013,8 @@ void open_file(char* file_name)
   die("fopen [open_file]");
  }
 
+ free(E.file_name);
+ E.file_name=strdup(file_name);
  select_syntax_highlight();
 
  size_t i=0;
@@ -5183,7 +5341,7 @@ static int32_t find_next_match(int32_t start_row,int32_t start_col,char* query,i
   else
   {
    row_index=(row_index-1+E.num_rows) % E.num_rows;
-   col_index=E.row[row_index].r_size+1;
+   col_index=E.row[row_index].r_size;
   }
 
   ++attempts;
@@ -5312,7 +5470,7 @@ void find_callback(char* query,uint16_t key)
 
   if(find_last_match_row == -1)
   {
-   start_col=E.row[start_row].r_size+1;
+   start_col=E.row[start_row].r_size;
   }
   else
   {
@@ -5335,7 +5493,7 @@ void find_callback(char* query,uint16_t key)
 
  E.c_y=found_row;
  E.c_x=row_r_x_to_c_x(row,render_byte_offset_to_r_x(row,found_col));
- E.row_off=E.num_rows;
+ E.row_off=found_row;
 
  saved_highlight_line=found_row;
 
@@ -5454,7 +5612,7 @@ void find()
      match_col=found_col;
      E.c_x=row_r_x_to_c_x(&E.row[found_row],render_byte_offset_to_r_x(&E.row[found_row],found_col));
      E.c_y=found_row;
-     E.row_off=E.num_rows;
+     E.row_off=found_row;
     }
    }
    break;
@@ -5470,7 +5628,7 @@ void find()
      match_col=found_col;
      E.c_x=row_r_x_to_c_x(&E.row[found_row],render_byte_offset_to_r_x(&E.row[found_row],found_col));
      E.c_y=found_row;
-     E.row_off=E.num_rows;
+     E.row_off=found_row;
     }
    }
    break;
@@ -5537,7 +5695,7 @@ void go_to_line()
  }
 
  E.c_x=snap_to_utf8_start(row,E.c_x);
- E.row_off=E.num_rows;
+ E.row_off=target-1;
 }
 
 static uint8_t is_render_boundary(e_row* row,int32_t r_x)
@@ -5606,23 +5764,8 @@ static uint8_t replace_one_match(int32_t r,int32_t r_x,char* query,char* replace
 
  if(c_len > 0 && del_action.row_text == NULL)
  {
-  die("malloc del_action.row_text [replace_one_match]");
- }
-
- if(c_len > 0)
- {
-  memcpy(del_action.row_text,&row->characters[c_start],c_len);
-  undo_push(&del_action);
- }
-
- for(i=0;(int32_t)i < c_len;++i)
- {
-  row_del_char(row,c_start);
- }
-
- for(i=0;i < replacement_len;++i)
- {
-  row_insert_char(row,c_start+(int32_t)i,replacement[i]);
+  set_status_message(ERROR_MSG_COLOR,"Low memory: cannot allocate undo buffer for delete");
+  return 0;
  }
 
  actions insert_action;
@@ -5637,7 +5780,14 @@ static uint8_t replace_one_match(int32_t r,int32_t r_x,char* query,char* replace
 
  if(replacement_len > 0 && insert_action.row_text == NULL)
  {
-  die("malloc insert_action.row_text [replace_one_match]");
+  free(del_action.row_text);
+  set_status_message(ERROR_MSG_COLOR,"Low memory: can not allocate undo buffer for insert");
+  return 0;
+ }
+
+ if(c_len > 0)
+ {
+  memcpy(del_action.row_text,&row->characters[c_start],c_len);
  }
 
  if(replacement_len > 0)
@@ -5645,7 +5795,20 @@ static uint8_t replace_one_match(int32_t r,int32_t r_x,char* query,char* replace
   memcpy(insert_action.row_text,replacement,replacement_len);
  }
 
+ undo_push(&del_action);
+
+ for(i=0;(int32_t)i < c_len;++i)
+ {
+  row_del_char(row,c_start);
+ }
+
+ for(i=0;i < replacement_len;++i)
+ {
+  row_insert_char(row,c_start+(int32_t)i,replacement[i]);
+ }
+
  undo_push(&insert_action);
+
  E.c_x=c_start+(int32_t)replacement_len;
  E.c_y=r;
  return 1;
@@ -5683,11 +5846,6 @@ static int32_t replace_all_matches(char* query,char* replacement)
 
    row=&E.row[r];
    offset=row_c_x_to_r_x(row,E.c_x);
-
-   if(offset <= old_offset)
-   {
-    offset=old_offset+1;
-   }
   }
  }
 
@@ -5804,7 +5962,7 @@ void search_and_replace()
      match_col=found_col;
      E.c_x=row_r_x_to_c_x(&E.row[found_row],render_byte_offset_to_r_x(&E.row[found_row],found_col));
      E.c_y=found_row;
-     E.row_off=E.num_rows;
+     E.row_off=found_row;
     }
    }
    break;
@@ -5820,7 +5978,7 @@ void search_and_replace()
      match_col=found_col;
      E.c_x=row_r_x_to_c_x(&E.row[found_row],render_byte_offset_to_r_x(&E.row[found_row],found_col));
      E.c_y=found_row;
-     E.row_off=E.num_rows;
+     E.row_off=found_row;
     }
    }
    break;
@@ -5875,7 +6033,7 @@ void search_and_replace()
     {
      E.c_x=row_r_x_to_c_x(&E.row[match_row],render_byte_offset_to_r_x(&E.row[match_row],match_col));
      E.c_y=match_row;
-     E.row_off=E.num_rows;
+     E.row_off=match_row;
     }
    }
    break;
@@ -5946,15 +6104,13 @@ char* prompt(uint8_t color,char* prompt,void (*callback)(char*,uint16_t))
       }
       buffer=temp;
      }
-
      buffer[buffer_replacement_len++]=(char)p_c;
      buffer[buffer_replacement_len]='\0';
     }
+    free(paste_stream_buffer);
+    paste_stream_buffer=NULL;
+    paste_stream_len=0;
    }
-
-   free(paste_stream_buffer);
-   paste_stream_buffer=NULL;
-   paste_stream_len=0;
   }
   else if(c == DEL_KEY || c == BACKSPACE)
   {
@@ -6068,7 +6224,16 @@ void move_cursor(uint16_t key)
 
    if(row && E.c_x < row->size)
    {
-    E.c_x+=get_utf8_char_placement_length(row,E.c_x);
+    uint8_t seq_len=E.utf8_output ? utf8_seq_len_valid(row,E.c_x) : 0;
+
+    if(seq_len > 1)
+    {
+     E.c_x+=seq_len;
+    }
+    else
+    {
+     E.c_x+=1;
+    }
    }
    else if(row && E.c_x == row->size)
    {
@@ -6302,18 +6467,34 @@ void process_keypress()
  static int8_t quit_times=QUIT_TIMES;
  static int8_t open_times=QUIT_TIMES;
  static int8_t refresh_times=QUIT_TIMES;
- static char utf8_buf[4];
+ static char utf8_buf[8];
  static int utf8_len=0;
  static int utf8_expected=0;
  actions action;
  memset(&action,0,sizeof(action));
+
  uint16_t c=read_key();
 
-  if(c >= 1000 || c < 32 || c == 127)
-  {
-   utf8_len=0;
-   utf8_expected=0;
-  }
+ if(c != CTRL_KEY('q'))
+ {
+  quit_times=QUIT_TIMES;
+ }
+
+ if(c != CTRL_KEY('o'))
+ {
+  open_times=QUIT_TIMES;
+ }
+
+ if(c != CTRL_KEY('p'))
+ {
+  refresh_times=QUIT_TIMES;
+ }
+
+ if(c >= 1000 || c < 32 || c == 127)
+ {
+  utf8_len=0;
+  utf8_expected=0;
+ }
 
  switch(c)
  {
@@ -6562,28 +6743,31 @@ void process_keypress()
      }
     }
 
-    insert_text_range(paste_stream_buffer,clean_len);
-
     action.type=USER_ACTION_RANGE_INSERT;
     action.c_x=start_x;
     action.c_y=start_y;
+    action.row_text=(clean_len > 0) ? malloc(clean_len) : NULL;
+
+    if(clean_len > 0 && action.row_text == NULL)
+    {
+     set_status_message(ERROR_MSG_COLOR,"Low memory: paste aborted");
+     free(paste_stream_buffer);
+     paste_stream_buffer=NULL;
+     paste_stream_len=0;
+     return;
+    }
+
+    insert_text_range(paste_stream_buffer,clean_len);
+
     action.c_x_end=E.c_x;
     action.c_y_end=E.c_y;
-    action.row_text=malloc(clean_len);
 
-    if(action.row_text != NULL || clean_len == 0)
+    if(clean_len > 0)
     {
-     if(clean_len > 0)
-     {
-      memcpy(action.row_text,paste_stream_buffer,clean_len);
-     }
-     action.row_len=clean_len;
-     undo_push(&action);
+     memcpy(action.row_text,paste_stream_buffer,clean_len);
     }
-    else
-    {
-     set_status_message(ERROR_MSG_COLOR,"Low memory: paste not added to undo history");
-    }
+    action.row_len=clean_len;
+    undo_push(&action);
    }
 
    free(paste_stream_buffer);
@@ -6630,22 +6814,21 @@ void process_keypress()
      action.row_len=E.row[E.c_y].size;
      action.row_text=action.row_len > 0 ? malloc(action.row_len) : NULL;
 
-     if(action.row_text != NULL)
+     if(action.row_len > 0)
      {
+      action.row_text=malloc(action.row_len);
+
+      if(action.row_text == NULL)
+      {
+       set_status_message(ERROR_MSG_COLOR,"Low memory: join aborted");
+       return;
+      }
       memcpy(action.row_text,E.row[E.c_y].characters,action.row_len);
-      undo_push(&action);
      }
-     else if(action.row_len == 0)
-     {
-      undo_push(&action);
-     }
-     else
-     {
-      set_status_message(ERROR_MSG_COLOR,"Low memory: join not added to undo history");
-     }
+     undo_push(&action);
+     del_char();
     }
    }
-   del_char();
   }
   break;
 
@@ -7007,21 +7190,6 @@ void process_keypress()
   }
   break;
  }
-
- if(c != CTRL_KEY('q'))
- {
-  quit_times=QUIT_TIMES;
- }
-
- if(c != CTRL_KEY('o'))
- {
-  open_times=QUIT_TIMES;
- }
-
- if(c != CTRL_KEY('p'))
- {
-  refresh_times=QUIT_TIMES;
- }
 }
 
 /*** output ***/
@@ -7240,10 +7408,21 @@ static int32_t compute_wrap_segments(e_row* row,int32_t* seg_render_starts,int32
 
  int32_t total=0;
  int32_t i=0;
+ int32_t col=0;
 
- for(i=0;i < row->r_size;++i)
+ while(i < row->r_size)
  {
-  total+=rendered_char_width(row->render,i,row->r_size);
+  uint8_t step_w=0;
+  int32_t step=token_step(row,i,&step_w);
+
+  if(row->render[i] == '\t')
+  {
+   step_w=TAB_STOP-(col & (TAB_STOP-1));
+  }
+
+  col+=step_w;
+  total+=step_w;
+  i+=step;
  }
 
  if(total <= available)
@@ -7989,9 +8168,12 @@ void draw_rows(a_buf* a_buffer)
     }
     else if(c_i == ' ' && c_x_running < row->size && row->characters[c_x_running] == '\t')
     {
-     int32_t tab_width=row_c_x_to_r_x(row,c_x_running+1)-row_c_x_to_r_x(row, c_x_running);
-     tab_spaces_remaining=tab_width-1;
-     c_x_advance=1;
+     if(c_x_running < row->size)
+     {
+      int32_t tab_width=row_c_x_to_r_x(row,c_x_running+1)-row_c_x_to_r_x(row, c_x_running);
+      tab_spaces_remaining=tab_width-1;
+      c_x_advance=1;
+     }
     }
 
     if(h_i == H_CTRL)
@@ -8205,7 +8387,7 @@ void draw_status_bar(a_buf* a_buffer)
  a_buf_append(a_buffer," ",1);
 
  char status[256];
- char rstatus[128];
+ char r_status[128];
 
  int16_t used=mode_len+1;
  int16_t name_room=E.screen_cols-used-1-(E.dirty ? 10 : 0);
@@ -8222,33 +8404,38 @@ void draw_status_bar(a_buf* a_buffer)
  char* full_name=E.file_name ? E.file_name : "[No Name]";
  int32_t name_len=utf8_safe_trunc_len(full_name,name_room);
 
- int16_t len=snprintf(status,sizeof(status),"%.*s %s",(int)name_len,full_name,E.dirty ? "(modified)" : "");
-                                                                                                           
- int16_t rlen=snprintf(rstatus,sizeof(rstatus),"%.22s u:%d/%d r:%d/%d | %d/%d | %d/%d",E.syntax ? E.syntax->file_type : "unknown",E.undo_top+1,SIZE_LIMIT,E.redo_top+1,SIZE_LIMIT,E.c_x+1,(E.c_y < E.num_rows) ? E.row[E.c_y].r_size : 0,E.c_y+1,E.num_rows);
+ int16_t l_len=snprintf(status,sizeof(status),"%.*s %s",(int)name_len,full_name,E.dirty ? "(modified)" : "");
+ int16_t r_len=snprintf(r_status,sizeof(r_status),"%.22s u:%d/%d r:%d/%d | %d/%d | %d/%d",E.syntax ? E.syntax->file_type : "unknown",E.undo_top+1,SIZE_LIMIT,E.redo_top+1,SIZE_LIMIT,E.c_x+1,(E.c_y < E.num_rows) ? E.row[E.c_y].r_size : 0,E.c_y+1,E.num_rows);
 
- if(len > E.screen_cols-used)
+ if(l_len > E.screen_cols-used)
  {
-  len=E.screen_cols-used;
+  l_len=E.screen_cols-used;
  }
 
- if(len < 0)
+ if(l_len < 0)
  {
-  len=0;
+  l_len=0;
  }
 
- a_buf_append(a_buffer,status,len);
+ a_buf_append(a_buffer,status,l_len);
 
- while(used+len < E.screen_cols)
+ int16_t padding_needed=E.screen_cols-used-l_len-r_len;
+
+ if(padding_needed >= 0)
  {
-  if(E.screen_cols-used-len == rlen)
-  {
-   a_buf_append(a_buffer,rstatus,rlen);
-   break;
-  }
-  else
+  while(padding_needed-- > 0)
   {
    a_buf_append(a_buffer," ",1);
-   ++len;
+  }
+  a_buf_append(a_buffer,r_status,r_len);
+ }
+ else
+ {
+  int16_t show_r_len=E.screen_cols-used-l_len;
+
+  if(show_r_len > 0)
+  {
+   a_buf_append(a_buffer,r_status,show_r_len);
   }
  }
  a_buf_append(a_buffer,"\x1b[0m",4);
@@ -8364,10 +8551,9 @@ void refresh_screen()
  scroll();
 
  a_buf a_buffer={NULL,0,0};
-
  a_buf_append(&a_buffer,"\x1b[?25l",6);
  a_buf_append(&a_buffer,"\x1b[H",3);
- 
+
  draw_rows(&a_buffer);
 
  if(E.file_modified_externally)
@@ -8402,6 +8588,16 @@ void refresh_screen()
  else
  {
   cursor_col=E.r_x-E.col_off+E.line_num_width+1;
+ }
+
+ if(cursor_col < 1)
+ {
+  cursor_col=1;
+ }
+
+ if(cursor_col > E.screen_cols)
+ {
+  cursor_col=E.screen_cols;
  }
 
  char buffer[32];
